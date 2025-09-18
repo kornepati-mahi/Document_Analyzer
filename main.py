@@ -182,18 +182,25 @@ def clean_text(text):
 def ask_llm(question, context, max_retries=3):
     if not GROQ_API_KEY:
         return "Error: GROQ_API_KEY not found in environment variables."
-    if not context or not context.strip():
-        return "Error: No context provided for analysis."
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+
+    # Build messages allowing optional context. Some callers (e.g., consolidation) may
+    # send an instruction-only prompt without separate context.
+    if context and context.strip():
+        user_content = f"Document Content:\n{context}\n\nQuestion: {question}\n\nPlease provide a detailed and structured response based on the document content."
+    else:
+        user_content = question
+
     messages = [
-        {"role": "system", "content": "You are an expert document analyst specializing in bid and tender documents. Provide clear, accurate, and structured responses based on the document content. If information is not found, clearly state that."},
-        {"role": "user", "content": f"Document Content:\n{context}\n\nQuestion: {question}\n\nPlease provide a detailed and structured response based on the document content."}
+        {"role": "system", "content": "You are an expert document analyst specializing in bid and tender documents. Provide clear, accurate, and structured responses. If information is not found, clearly state that."},
+        {"role": "user", "content": user_content}
     ]
+
     data = {"model": "llama3-8b-8192", "messages": messages, "temperature": 0.3, "max_tokens": 1000}
     last_error = None
     for attempt in range(max_retries):
         try:
-            response = requests.post(GROQ_API_URL, headers=headers, json=data, timeout=30)
+            response = requests.post(GROQ_API_URL, headers=headers, json=data, timeout=45)
             response.raise_for_status()
             response_data = response.json()
             if 'choices' in response_data and len(response_data['choices']) > 0:
@@ -254,10 +261,21 @@ def generate_comprehensive_summary(text_chunks):
             except Exception as e:
                 st.warning(f"Error processing chunk {i+1}: {str(e)}")
                 continue
+    # Fallback: if all chunked requests failed, try a single-pass summary on the first
+    # one or two chunks combined, so users still get a result.
     if not all_summaries:
-        return "Unable to generate summary due to processing errors."
+        try:
+            fallback_context = "\n\n".join(text_chunks[:2])
+            fallback = ask_llm(summary_prompt, fallback_context)
+            if not fallback.startswith("Error") and len(fallback.strip()) > 0:
+                all_summaries.append(fallback)
+            else:
+                return "Unable to generate summary due to processing errors."
+        except Exception:
+            return "Unable to generate summary due to processing errors."
     final_summary_prompt = f"""Based on the following analysis sections from the same document, create a single comprehensive summary by combining and deduplicating the information:\n\n{chr(10).join([f"Section {i+1}:\n{summary}\n" for i, summary in enumerate(all_summaries)])}\n\nProvide a final consolidated summary with the same structure, keeping only the most complete and accurate information for each field."""
     try:
+        # Consolidation uses the instruction-only prompt without separate context.
         final_summary = ask_llm(final_summary_prompt, "")
         return final_summary if not final_summary.startswith("Error") else all_summaries[0]
     except:
