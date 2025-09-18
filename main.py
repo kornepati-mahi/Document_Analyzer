@@ -66,7 +66,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-def split_text_into_chunks(text, chunk_size=3000, overlap=300):
+def split_text_into_chunks(text, chunk_size=2200, overlap=250):
     if not text or len(text.strip()) == 0:
         return []
     chunks = []
@@ -95,8 +95,18 @@ def extract_text_from_pdf(pdf_file):
                 st.warning(f"Error reading page {page_num + 1}: {str(e)}")
                 continue
         if not text.strip():
-            st.error("No text could be extracted from the PDF. The PDF might be password-protected or contain only images.")
-            return None
+            # Fallback: try pdfminer.six if available
+            try:
+                from io import BytesIO
+                from pdfminer.high_level import extract_text as pdfminer_extract
+                if hasattr(pdf_file, 'getvalue'):
+                    pdf_bytes = pdf_file.getvalue()
+                else:
+                    pdf_bytes = pdf_file.read()
+                text = pdfminer_extract(BytesIO(pdf_bytes)) or ""
+            except Exception as _:
+                st.error("No text could be extracted from the PDF. The PDF might be password-protected or contain only scanned images.")
+                return None
         return text
     except Exception as e:
         st.error(f"Error reading PDF file: {str(e)}")
@@ -249,15 +259,24 @@ def generate_comprehensive_summary(text_chunks):
         return "No content available for summarization."
     summary_prompt = """Analyze this bid/tender document and extract the following key information. If any information is not found, clearly state "Not mentioned" or "Not found":\n\n**BASIC INFORMATION:**\n- Tender Number/Reference:\n- Name of Work/Project:\n- Issuing Department/Organization:\n\n**FINANCIAL DETAILS:**\n- Estimated Contract Value:\n- EMD (Earnest Money Deposit):\n- EMD Exemption (if any):\n- Performance Security:\n\n**TIMELINE:**\n- Bid Submission Deadline:\n- Technical Bid Opening:\n- Contract Duration:\n\n**REQUIREMENTS:**\n- Key Eligibility Criteria:\n- Required Documents:\n- Technical Specifications (brief):\n- Payment Terms:\n\nProvide only the information that is clearly mentioned in the document."""
     all_summaries = []
+    # If API key is missing, skip directly to heuristic summary
+    if not GROQ_API_KEY:
+        try:
+            combined_text = "\n\n".join(text_chunks[:3])
+            return heuristic_summary_from_text(combined_text)
+        except Exception:
+            return "Unable to generate summary due to processing errors."
+
+    max_chunks = min(len(text_chunks), 6)
     with st.spinner("Analyzing document sections..."):
         progress_bar = st.progress(0)
-        for i, chunk in enumerate(text_chunks):
+        for i, chunk in enumerate(text_chunks[:max_chunks]):
             try:
                 summary = ask_llm(summary_prompt, chunk)
                 if not summary.startswith("Error"):
                     all_summaries.append(summary)
-                progress_bar.progress((i + 1) / len(text_chunks))
-                time.sleep(1.2)
+                progress_bar.progress((i + 1) / max_chunks)
+                time.sleep(0.2)
             except Exception as e:
                 st.warning(f"Error processing chunk {i+1}: {str(e)}")
                 continue
@@ -558,7 +577,17 @@ def main():
     if "cleaned_text" in st.session_state:
         st.subheader("📋 Document Analysis Summary")
         if st.session_state.summary.startswith("Error"):
-            st.markdown(f'<div class="error-card"><h4>⚠️ Summary Generation Error:</h4><p>{st.session_state.summary}</p></div>', unsafe_allow_html=True)
+            # Attempt heuristic summary immediately so users still get output
+            heuristic = None
+            try:
+                heuristic = heuristic_summary_from_text(st.session_state.get("cleaned_text", ""))
+            except Exception:
+                heuristic = None
+            if heuristic:
+                formatted_summary = format_summary_for_display(heuristic)
+                st.markdown(f'<div class="summary-card">{formatted_summary}</div>', unsafe_allow_html=True)
+            else:
+                st.markdown(f'<div class="error-card"><h4>⚠️ Summary Generation Error:</h4><p>{st.session_state.summary}</p></div>', unsafe_allow_html=True)
         else:
             formatted_summary = format_summary_for_display(st.session_state.summary)
             st.markdown(f'<div class="summary-card">{formatted_summary}</div>', unsafe_allow_html=True)
@@ -583,6 +612,15 @@ def main():
                     label=f"📥 Download Translated ({st.session_state.translated_lang})",
                     data=st.session_state.translated_text,
                     file_name=f"bid_analysis_{st.session_state.translated_lang.lower().replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+                    mime="text/plain",
+                    use_container_width=True
+                )
+            else:
+                # Offer raw extracted text download for debugging/backup
+                st.download_button(
+                    label="📥 Download Raw Extracted Text",
+                    data=st.session_state.get("cleaned_text", ""),
+                    file_name=f"raw_text_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
                     mime="text/plain",
                     use_container_width=True
                 )
