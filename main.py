@@ -206,7 +206,7 @@ def ask_llm(question, context, max_retries=3):
         {"role": "user", "content": user_content}
     ]
 
-    data = {"model": "llama3-8b-8192", "messages": messages, "temperature": 0.3, "max_tokens": 1000}
+    data = {"model": ""llama-3.1-8b-instant", "messages": messages, "temperature": 0.3, "max_tokens": 1000}
     last_error = None
     for attempt in range(max_retries):
         try:
@@ -655,3 +655,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
