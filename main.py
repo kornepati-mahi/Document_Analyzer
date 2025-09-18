@@ -269,9 +269,17 @@ def generate_comprehensive_summary(text_chunks):
             fallback = ask_llm(summary_prompt, fallback_context)
             if not fallback.startswith("Error") and len(fallback.strip()) > 0:
                 all_summaries.append(fallback)
-            else:
-                return "Unable to generate summary due to processing errors."
         except Exception:
+            pass
+        # If still nothing, perform a lightweight heuristic extraction as a final safeguard
+        if not all_summaries:
+            try:
+                combined_text = "\n\n".join(text_chunks[:3])
+                heuristic_summary = heuristic_summary_from_text(combined_text)
+                if heuristic_summary and len(heuristic_summary.strip()) > 0:
+                    return heuristic_summary
+            except Exception:
+                pass
             return "Unable to generate summary due to processing errors."
     final_summary_prompt = f"""Based on the following analysis sections from the same document, create a single comprehensive summary by combining and deduplicating the information:\n\n{chr(10).join([f"Section {i+1}:\n{summary}\n" for i, summary in enumerate(all_summaries)])}\n\nProvide a final consolidated summary with the same structure, keeping only the most complete and accurate information for each field."""
     try:
@@ -280,6 +288,96 @@ def generate_comprehensive_summary(text_chunks):
         return final_summary if not final_summary.startswith("Error") else all_summaries[0]
     except:
         return all_summaries[0] if all_summaries else "Summary generation failed."
+
+# ---------------- Heuristic (non-LLM) fallback summarizer ---------------- #
+def _find_first(patterns, text, flags=re.IGNORECASE):
+    for pattern in patterns:
+        match = re.search(pattern, text, flags)
+        if match:
+            # Prefer the last captured group if any
+            if match.groups():
+                return next((g for g in match.groups() if g), match.group(0))
+            return match.group(0)
+    return None
+
+def heuristic_summary_from_text(text):
+    if not text:
+        return "Unable to generate summary due to processing errors."
+    snippet = text[:120000]
+
+    # Currency/amount patterns
+    amount_patterns = [
+        r"(?:INR|Rs\.?|₹)\s?([\d,]+\.?\d*\s?(?:lakh|crore)?)",
+        r"([\d,]+\.?\d*\s?(?:INR|Rs\.?|₹))",
+        r"([\d,]+\.?\d*\s?(?:lakhs?|crores?))",
+    ]
+
+    # Date patterns
+    date_patterns = [
+        r"(\b\d{1,2}[\-/]\d{1,2}[\-/]\d{2,4}\b)",
+        r"(\b\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\.?\s+\d{2,4}\b)",
+        r"(\b\d{4}-\d{2}-\d{2}\b)",
+    ]
+
+    # Simple field extraction heuristics
+    tender_no = _find_first([r"Tender\s*(?:No\.?|Number)\s*[:\-]\s*([^\n]+)", r"RFP\s*No\.?\s*[:\-]\s*([^\n]+)"], snippet)
+    project_name = _find_first([r"Name of Work\s*[:\-]\s*([^\n]+)", r"Name of Project\s*[:\-]\s*([^\n]+)", r"Project\s*[:\-]\s*([^\n]+)"], snippet)
+    org = _find_first([r"(?:Issuer|Issuing|Department|Organization|Authority)\s*[:\-]\s*([^\n]+)", r"Government of[^\n]+"], snippet)
+
+    contract_value = _find_first([r"Estimated\s*(?:Cost|Contract Value)\s*[:\-]\s*([^\n]+)"] + amount_patterns, snippet)
+    emd = _find_first([r"EMD\s*(?:Amount)?\s*[:\-]\s*([^\n]+)"] + amount_patterns, snippet)
+    perf_sec = _find_first([r"Performance\s*Security\s*[:\-]\s*([^\n]+)"] + amount_patterns, snippet)
+
+    # Deadlines/opening dates
+    submission_deadline = _find_first([r"Bid Submission.*?[:\-]\s*([^\n]+)", r"Last Date.*?Submission.*?[:\-]\s*([^\n]+)"] + date_patterns, snippet)
+    tech_opening = _find_first([r"Technical Bid Opening.*?[:\-]\s*([^\n]+)"] + date_patterns, snippet)
+    duration = _find_first([r"Contract Duration\s*[:\-]\s*([^\n]+)", r"Completion Period\s*[:\-]\s*([^\n]+)"], snippet)
+
+    # Eligibility / documents (extract short lines near keywords)
+    def _collect_bullets(keyword):
+        lines = []
+        for m in re.finditer(rf"{keyword}[^\n]*\n((?:.*\n){0,8})", snippet, re.IGNORECASE):
+            block = m.group(1)
+            for ln in block.splitlines():
+                if re.search(r"^\s*(?:[-*•]\s+|\d+\)\s+).{3,}", ln):
+                    lines.append(re.sub(r"^\s*(?:[-*•]|\d+\))\s+", "", ln).strip())
+        return list(dict.fromkeys(lines))[:6]
+
+    eligibility = _collect_bullets("Eligibility|Qualif")
+    req_docs = _collect_bullets("Document|Submission of|Upload the following")
+    specs = _collect_bullets("Specification|Scope of Work|Technical")
+    pay_terms = _collect_bullets("Payment Terms|Payment Schedule")
+
+    def _fmt(value):
+        return value if value else "Not mentioned"
+
+    parts = []
+    parts.append("**BASIC INFORMATION:**")
+    parts.append(f"- Tender Number/Reference: {_fmt(tender_no)}")
+    parts.append(f"- Name of Work/Project: {_fmt(project_name)}")
+    parts.append(f"- Issuing Department/Organization: {_fmt(org)}")
+    parts.append("")
+    parts.append("**FINANCIAL DETAILS:**")
+    parts.append(f"- Estimated Contract Value: {_fmt(contract_value)}")
+    parts.append(f"- EMD (Earnest Money Deposit): {_fmt(emd)}")
+    parts.append(f"- EMD Exemption (if any): Not mentioned")
+    parts.append(f"- Performance Security: {_fmt(perf_sec)}")
+    parts.append("")
+    parts.append("**TIMELINE:**")
+    parts.append(f"- Bid Submission Deadline: {_fmt(submission_deadline)}")
+    parts.append(f"- Technical Bid Opening: {_fmt(tech_opening)}")
+    parts.append(f"- Contract Duration: {_fmt(duration)}")
+    parts.append("")
+    parts.append("**REQUIREMENTS:**")
+    parts.append("- Key Eligibility Criteria:")
+    parts += [f"  - {item}" for item in (eligibility or ["Not mentioned"])[:6]]
+    parts.append("- Required Documents:")
+    parts += [f"  - {item}" for item in (req_docs or ["Not mentioned"])[:6]]
+    parts.append("- Technical Specifications (brief):")
+    parts += [f"  - {item}" for item in (specs or ["Not mentioned"])[:6]]
+    parts.append(f"- Payment Terms: {_fmt('; '.join(pay_terms) if pay_terms else None)}")
+
+    return "\n".join(parts)
 
 def answer_question_from_chunks(question, text_chunks):
     if not text_chunks:
