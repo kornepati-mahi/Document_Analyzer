@@ -66,7 +66,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-def split_text_into_chunks(text, chunk_size=2200, overlap=250):
+def split_text_into_chunks(text, chunk_size=3000, overlap=300):
     if not text or len(text.strip()) == 0:
         return []
     chunks = []
@@ -95,18 +95,8 @@ def extract_text_from_pdf(pdf_file):
                 st.warning(f"Error reading page {page_num + 1}: {str(e)}")
                 continue
         if not text.strip():
-            # Fallback: try pdfminer.six if available
-            try:
-                from io import BytesIO
-                from pdfminer.high_level import extract_text as pdfminer_extract
-                if hasattr(pdf_file, 'getvalue'):
-                    pdf_bytes = pdf_file.getvalue()
-                else:
-                    pdf_bytes = pdf_file.read()
-                text = pdfminer_extract(BytesIO(pdf_bytes)) or ""
-            except Exception as _:
-                st.error("No text could be extracted from the PDF. The PDF might be password-protected or contain only scanned images.")
-                return None
+            st.error("No text could be extracted from the PDF. The PDF might be password-protected or contain only images.")
+            return None
         return text
     except Exception as e:
         st.error(f"Error reading PDF file: {str(e)}")
@@ -193,24 +183,26 @@ def ask_llm(question, context, max_retries=3):
     if not GROQ_API_KEY:
         return "Error: GROQ_API_KEY not found in environment variables."
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-
-    # Build messages allowing optional context. Some callers (e.g., consolidation) may
-    # send an instruction-only prompt without separate context.
+    # Allow prompt-only calls when context is empty
     if context and context.strip():
         user_content = f"Document Content:\n{context}\n\nQuestion: {question}\n\nPlease provide a detailed and structured response based on the document content."
     else:
-        user_content = question
-
+        user_content = f"{question}"
     messages = [
-        {"role": "system", "content": "You are an expert document analyst specializing in bid and tender documents. Provide clear, accurate, and structured responses. If information is not found, clearly state that."},
+        {"role": "system", "content": "You are an expert document analyst specializing in bid and tender documents. Provide clear, accurate, and structured responses based on the document content. If information is not found, clearly state that."},
         {"role": "user", "content": user_content}
     ]
-
-    data = {"model": ""llama-3.1-8b-instant", "messages": messages, "temperature": 0.3, "max_tokens": 1000}
+    data = {"model": "llama-3.1-8b-instant", "messages": messages, "temperature": 0.3, "max_tokens": 1000}
     last_error = None
     for attempt in range(max_retries):
         try:
-            response = requests.post(GROQ_API_URL, headers=headers, json=data, timeout=45)
+            response = requests.post(GROQ_API_URL, headers=headers, json=data, timeout=30)
+            if response.status_code >= 400:
+                try:
+                    err_json = response.json()
+                    return f"Error: {response.status_code} - {err_json.get('error', {}).get('message') or err_json}"
+                except Exception:
+                    return f"Error: {response.status_code} - {response.text}"
             response.raise_for_status()
             response_data = response.json()
             if 'choices' in response_data and len(response_data['choices']) > 0:
@@ -242,9 +234,15 @@ def translate_text_with_llm(text_to_translate, target_language):
         {"role": "system", "content": f"You are an expert translator. Your task is to translate English text into {target_language} accurately."},
         {"role": "user", "content": prompt}
     ]
-    data = {"model": "llama3-8b-8192", "messages": messages, "temperature": 0.1, "max_tokens": 2000}
+    data = {"model": "llama-3.1-8b-instant", "messages": messages, "temperature": 0.1, "max_tokens": 2000}
     try:
         response = requests.post(GROQ_API_URL, headers=headers, json=data, timeout=45)
+        if response.status_code >= 400:
+            try:
+                err_json = response.json()
+                return f"Error during translation API call: {response.status_code} - {err_json.get('error', {}).get('message') or err_json}"
+            except Exception:
+                return f"Error during translation API call: {response.status_code} - {response.text}"
         response.raise_for_status()
         response_data = response.json()
         if 'choices' in response_data and len(response_data['choices']) > 0:
@@ -259,144 +257,27 @@ def generate_comprehensive_summary(text_chunks):
         return "No content available for summarization."
     summary_prompt = """Analyze this bid/tender document and extract the following key information. If any information is not found, clearly state "Not mentioned" or "Not found":\n\n**BASIC INFORMATION:**\n- Tender Number/Reference:\n- Name of Work/Project:\n- Issuing Department/Organization:\n\n**FINANCIAL DETAILS:**\n- Estimated Contract Value:\n- EMD (Earnest Money Deposit):\n- EMD Exemption (if any):\n- Performance Security:\n\n**TIMELINE:**\n- Bid Submission Deadline:\n- Technical Bid Opening:\n- Contract Duration:\n\n**REQUIREMENTS:**\n- Key Eligibility Criteria:\n- Required Documents:\n- Technical Specifications (brief):\n- Payment Terms:\n\nProvide only the information that is clearly mentioned in the document."""
     all_summaries = []
-    # If API key is missing, skip directly to heuristic summary
-    if not GROQ_API_KEY:
-        try:
-            combined_text = "\n\n".join(text_chunks[:3])
-            return heuristic_summary_from_text(combined_text)
-        except Exception:
-            return "Unable to generate summary due to processing errors."
-
-    max_chunks = min(len(text_chunks), 6)
     with st.spinner("Analyzing document sections..."):
         progress_bar = st.progress(0)
-        for i, chunk in enumerate(text_chunks[:max_chunks]):
+        for i, chunk in enumerate(text_chunks):
             try:
                 summary = ask_llm(summary_prompt, chunk)
                 if not summary.startswith("Error"):
                     all_summaries.append(summary)
-                progress_bar.progress((i + 1) / max_chunks)
-                time.sleep(0.2)
+                progress_bar.progress((i + 1) / len(text_chunks))
+                time.sleep(1.2)
             except Exception as e:
                 st.warning(f"Error processing chunk {i+1}: {str(e)}")
                 continue
-    # Fallback: if all chunked requests failed, try a single-pass summary on the first
-    # one or two chunks combined, so users still get a result.
     if not all_summaries:
-        try:
-            fallback_context = "\n\n".join(text_chunks[:2])
-            fallback = ask_llm(summary_prompt, fallback_context)
-            if not fallback.startswith("Error") and len(fallback.strip()) > 0:
-                all_summaries.append(fallback)
-        except Exception:
-            pass
-        # If still nothing, perform a lightweight heuristic extraction as a final safeguard
-        if not all_summaries:
-            try:
-                combined_text = "\n\n".join(text_chunks[:3])
-                heuristic_summary = heuristic_summary_from_text(combined_text)
-                if heuristic_summary and len(heuristic_summary.strip()) > 0:
-                    return heuristic_summary
-            except Exception:
-                pass
-            return "Unable to generate summary due to processing errors."
-    final_summary_prompt = f"""Based on the following analysis sections from the same document, create a single comprehensive summary by combining and deduplicating the information:\n\n{chr(10).join([f"Section {i+1}:\n{summary}\n" for i, summary in enumerate(all_summaries)])}\n\nProvide a final consolidated summary with the same structure, keeping only the most complete and accurate information for each field."""
+        return "Unable to generate summary due to processing errors."
+    final_summary_prompt = "Create a single comprehensive summary by combining and deduplicating the information below. Keep the same structure and keep only the most complete and accurate information for each field."
+    consolidation_context = chr(10).join([f"Section {i+1}:\n{summary}\n" for i, summary in enumerate(all_summaries)])
     try:
-        # Consolidation uses the instruction-only prompt without separate context.
-        final_summary = ask_llm(final_summary_prompt, "")
+        final_summary = ask_llm(final_summary_prompt, consolidation_context)
         return final_summary if not final_summary.startswith("Error") else all_summaries[0]
     except:
         return all_summaries[0] if all_summaries else "Summary generation failed."
-
-# ---------------- Heuristic (non-LLM) fallback summarizer ---------------- #
-def _find_first(patterns, text, flags=re.IGNORECASE):
-    for pattern in patterns:
-        match = re.search(pattern, text, flags)
-        if match:
-            # Prefer the last captured group if any
-            if match.groups():
-                return next((g for g in match.groups() if g), match.group(0))
-            return match.group(0)
-    return None
-
-def heuristic_summary_from_text(text):
-    if not text:
-        return "Unable to generate summary due to processing errors."
-    snippet = text[:120000]
-
-    # Currency/amount patterns
-    amount_patterns = [
-        r"(?:INR|Rs\.?|₹)\s?([\d,]+\.?\d*\s?(?:lakh|crore)?)",
-        r"([\d,]+\.?\d*\s?(?:INR|Rs\.?|₹))",
-        r"([\d,]+\.?\d*\s?(?:lakhs?|crores?))",
-    ]
-
-    # Date patterns
-    date_patterns = [
-        r"(\b\d{1,2}[\-/]\d{1,2}[\-/]\d{2,4}\b)",
-        r"(\b\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\.?\s+\d{2,4}\b)",
-        r"(\b\d{4}-\d{2}-\d{2}\b)",
-    ]
-
-    # Simple field extraction heuristics
-    tender_no = _find_first([r"Tender\s*(?:No\.?|Number)\s*[:\-]\s*([^\n]+)", r"RFP\s*No\.?\s*[:\-]\s*([^\n]+)"], snippet)
-    project_name = _find_first([r"Name of Work\s*[:\-]\s*([^\n]+)", r"Name of Project\s*[:\-]\s*([^\n]+)", r"Project\s*[:\-]\s*([^\n]+)"], snippet)
-    org = _find_first([r"(?:Issuer|Issuing|Department|Organization|Authority)\s*[:\-]\s*([^\n]+)", r"Government of[^\n]+"], snippet)
-
-    contract_value = _find_first([r"Estimated\s*(?:Cost|Contract Value)\s*[:\-]\s*([^\n]+)"] + amount_patterns, snippet)
-    emd = _find_first([r"EMD\s*(?:Amount)?\s*[:\-]\s*([^\n]+)"] + amount_patterns, snippet)
-    perf_sec = _find_first([r"Performance\s*Security\s*[:\-]\s*([^\n]+)"] + amount_patterns, snippet)
-
-    # Deadlines/opening dates
-    submission_deadline = _find_first([r"Bid Submission.*?[:\-]\s*([^\n]+)", r"Last Date.*?Submission.*?[:\-]\s*([^\n]+)"] + date_patterns, snippet)
-    tech_opening = _find_first([r"Technical Bid Opening.*?[:\-]\s*([^\n]+)"] + date_patterns, snippet)
-    duration = _find_first([r"Contract Duration\s*[:\-]\s*([^\n]+)", r"Completion Period\s*[:\-]\s*([^\n]+)"], snippet)
-
-    # Eligibility / documents (extract short lines near keywords)
-    def _collect_bullets(keyword):
-        lines = []
-        for m in re.finditer(rf"{keyword}[^\n]*\n((?:.*\n){0,8})", snippet, re.IGNORECASE):
-            block = m.group(1)
-            for ln in block.splitlines():
-                if re.search(r"^\s*(?:[-*•]\s+|\d+\)\s+).{3,}", ln):
-                    lines.append(re.sub(r"^\s*(?:[-*•]|\d+\))\s+", "", ln).strip())
-        return list(dict.fromkeys(lines))[:6]
-
-    eligibility = _collect_bullets("Eligibility|Qualif")
-    req_docs = _collect_bullets("Document|Submission of|Upload the following")
-    specs = _collect_bullets("Specification|Scope of Work|Technical")
-    pay_terms = _collect_bullets("Payment Terms|Payment Schedule")
-
-    def _fmt(value):
-        return value if value else "Not mentioned"
-
-    parts = []
-    parts.append("**BASIC INFORMATION:**")
-    parts.append(f"- Tender Number/Reference: {_fmt(tender_no)}")
-    parts.append(f"- Name of Work/Project: {_fmt(project_name)}")
-    parts.append(f"- Issuing Department/Organization: {_fmt(org)}")
-    parts.append("")
-    parts.append("**FINANCIAL DETAILS:**")
-    parts.append(f"- Estimated Contract Value: {_fmt(contract_value)}")
-    parts.append(f"- EMD (Earnest Money Deposit): {_fmt(emd)}")
-    parts.append(f"- EMD Exemption (if any): Not mentioned")
-    parts.append(f"- Performance Security: {_fmt(perf_sec)}")
-    parts.append("")
-    parts.append("**TIMELINE:**")
-    parts.append(f"- Bid Submission Deadline: {_fmt(submission_deadline)}")
-    parts.append(f"- Technical Bid Opening: {_fmt(tech_opening)}")
-    parts.append(f"- Contract Duration: {_fmt(duration)}")
-    parts.append("")
-    parts.append("**REQUIREMENTS:**")
-    parts.append("- Key Eligibility Criteria:")
-    parts += [f"  - {item}" for item in (eligibility or ["Not mentioned"])[:6]]
-    parts.append("- Required Documents:")
-    parts += [f"  - {item}" for item in (req_docs or ["Not mentioned"])[:6]]
-    parts.append("- Technical Specifications (brief):")
-    parts += [f"  - {item}" for item in (specs or ["Not mentioned"])[:6]]
-    parts.append(f"- Payment Terms: {_fmt('; '.join(pay_terms) if pay_terms else None)}")
-
-    return "\n".join(parts)
 
 def answer_question_from_chunks(question, text_chunks):
     if not text_chunks:
@@ -418,9 +299,10 @@ def answer_question_from_chunks(question, text_chunks):
         return "No relevant information found in the document to answer your question."
     if len(relevant_answers) == 1:
         return relevant_answers[0]
-    combined_prompt = f"Question: {question}\n\nMultiple relevant sections found:\n{chr(10).join([f'Section {i+1}: {answer}' for i, answer in enumerate(relevant_answers)])}\n\nProvide a comprehensive answer by combining the relevant information from all sections, removing duplicates and contradictions."
+    combined_prompt = "Provide a comprehensive answer by combining the relevant information from the provided sections, removing duplicates and contradictions."
+    combined_context = f"Question: {question}\n\n" + chr(10).join([f"Section {i+1}: {answer}" for i, answer in enumerate(relevant_answers)])
     try:
-        final_answer = ask_llm(combined_prompt, "")
+        final_answer = ask_llm(combined_prompt, combined_context)
         return final_answer if not final_answer.startswith("Error") else relevant_answers[0]
     except:
         return relevant_answers[0]
@@ -577,17 +459,7 @@ def main():
     if "cleaned_text" in st.session_state:
         st.subheader("📋 Document Analysis Summary")
         if st.session_state.summary.startswith("Error"):
-            # Attempt heuristic summary immediately so users still get output
-            heuristic = None
-            try:
-                heuristic = heuristic_summary_from_text(st.session_state.get("cleaned_text", ""))
-            except Exception:
-                heuristic = None
-            if heuristic:
-                formatted_summary = format_summary_for_display(heuristic)
-                st.markdown(f'<div class="summary-card">{formatted_summary}</div>', unsafe_allow_html=True)
-            else:
-                st.markdown(f'<div class="error-card"><h4>⚠️ Summary Generation Error:</h4><p>{st.session_state.summary}</p></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="error-card"><h4>⚠️ Summary Generation Error:</h4><p>{st.session_state.summary}</p></div>', unsafe_allow_html=True)
         else:
             formatted_summary = format_summary_for_display(st.session_state.summary)
             st.markdown(f'<div class="summary-card">{formatted_summary}</div>', unsafe_allow_html=True)
@@ -612,15 +484,6 @@ def main():
                     label=f"📥 Download Translated ({st.session_state.translated_lang})",
                     data=st.session_state.translated_text,
                     file_name=f"bid_analysis_{st.session_state.translated_lang.lower().replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
-                    mime="text/plain",
-                    use_container_width=True
-                )
-            else:
-                # Offer raw extracted text download for debugging/backup
-                st.download_button(
-                    label="📥 Download Raw Extracted Text",
-                    data=st.session_state.get("cleaned_text", ""),
-                    file_name=f"raw_text_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
                     mime="text/plain",
                     use_container_width=True
                 )
@@ -655,4 +518,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
