@@ -8,6 +8,7 @@ import time
 from datetime import datetime
 import json
 import streamlit.components.v1 as components
+from io import BytesIO
 
 # Load environment variables
 load_dotenv()
@@ -178,6 +179,49 @@ def clean_text(text):
     text = re.sub(r'\s+', ' ', text)
     text = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', text)
     return text.strip()
+
+def create_pdf_bytes(text, title="Bid Analysis Summary"):
+    """Create a simple PDF from plain text and return bytes. Uses reportlab if available."""
+    if not text:
+        text = ""
+    try:
+        # Lazy import so the app still runs if reportlab isn't installed
+        from reportlab.lib.pagesizes import A4
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.enums import TA_LEFT
+        from reportlab.lib.units import inch
+        from reportlab.lib import utils
+
+        buffer = BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=36, rightMargin=36, topMargin=36, bottomMargin=36)
+        styles = getSampleStyleSheet()
+        normal = styles["Normal"]
+        heading = styles["Heading1"]
+
+        story = []
+        story.append(Paragraph(title, heading))
+        story.append(Spacer(1, 0.25 * inch))
+
+        # Preserve basic line breaks; split by double newlines into paragraphs
+        paragraphs = [p.strip() for p in text.replace('\r', '').split('\n\n') if p.strip()]
+        if not paragraphs:
+            paragraphs = [text]
+
+        # Use simple Paragraphs; replace lone newlines inside a paragraph with <br/>
+        for para in paragraphs:
+            safe_para = para.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+            safe_para = safe_para.replace('\n', '<br/>')
+            story.append(Paragraph(safe_para, normal))
+            story.append(Spacer(1, 0.15 * inch))
+
+        doc.build(story)
+        pdf_data = buffer.getvalue()
+        buffer.close()
+        return pdf_data
+    except Exception:
+        # If reportlab is missing or any error occurs, return None to allow fallback
+        return None
 
 def ask_llm(question, context, max_retries=3):
     if not GROQ_API_KEY:
@@ -471,22 +515,45 @@ def main():
         st.subheader("⬇️ Download Summaries")
         col1, col2 = st.columns(2)
         with col1:
-            st.download_button(
-                label="📥 Download Original (English)",
-                data=st.session_state.summary,
-                file_name=f"bid_analysis_english_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
-                mime="text/plain",
-                use_container_width=True
-            )
-        with col2:
-            if "translated_text" in st.session_state and st.session_state.translated_text:
+            pdf_data = create_pdf_bytes(st.session_state.summary, "Bid Analysis Summary (English)")
+            if pdf_data:
                 st.download_button(
-                    label=f"📥 Download Translated ({st.session_state.translated_lang})",
-                    data=st.session_state.translated_text,
-                    file_name=f"bid_analysis_{st.session_state.translated_lang.lower().replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+                    label="📥 Download Original (English) as PDF",
+                    data=pdf_data,
+                    file_name=f"bid_analysis_english_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True
+                )
+            else:
+                st.download_button(
+                    label="📥 Download Original (English) as TXT",
+                    data=st.session_state.summary,
+                    file_name=f"bid_analysis_english_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
                     mime="text/plain",
                     use_container_width=True
                 )
+        with col2:
+            if "translated_text" in st.session_state and st.session_state.translated_text:
+                translated_pdf = create_pdf_bytes(
+                    st.session_state.translated_text,
+                    f"Bid Analysis Summary ({st.session_state.translated_lang})"
+                )
+                if translated_pdf:
+                    st.download_button(
+                        label=f"📥 Download Translated ({st.session_state.translated_lang}) as PDF",
+                        data=translated_pdf,
+                        file_name=f"bid_analysis_{st.session_state.translated_lang.lower().replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                        mime="application/pdf",
+                        use_container_width=True
+                    )
+                else:
+                    st.download_button(
+                        label=f"📥 Download Translated ({st.session_state.translated_lang}) as TXT",
+                        data=st.session_state.translated_text,
+                        file_name=f"bid_analysis_{st.session_state.translated_lang.lower().replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+                        mime="text/plain",
+                        use_container_width=True
+                    )
         
         st.subheader("🔍 Ask Questions About the Document")
         col1, col2 = st.columns([4, 1])
