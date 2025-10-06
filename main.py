@@ -525,13 +525,7 @@ def main():
                     use_container_width=True
                 )
             else:
-                st.download_button(
-                    label="📥 Download Original (English) as TXT",
-                    data=st.session_state.summary,
-                    file_name=f"bid_analysis_english_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
-                    mime="text/plain",
-                    use_container_width=True
-                )
+                st.error("PDF generation is unavailable. Ensure 'reportlab' is installed on the server.")
         with col2:
             if "translated_text" in st.session_state and st.session_state.translated_text:
                 translated_pdf = create_pdf_bytes(
@@ -547,13 +541,7 @@ def main():
                         use_container_width=True
                     )
                 else:
-                    st.download_button(
-                        label=f"📥 Download Translated ({st.session_state.translated_lang}) as TXT",
-                        data=st.session_state.translated_text,
-                        file_name=f"bid_analysis_{st.session_state.translated_lang.lower().replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
-                        mime="text/plain",
-                        use_container_width=True
-                    )
+                    st.error("PDF generation is unavailable for the translated summary. Ensure 'reportlab' is installed on the server.")
         
         st.subheader("🔍 Ask Questions About the Document")
         col1, col2 = st.columns([4, 1])
