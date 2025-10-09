@@ -84,6 +84,7 @@ def split_text_into_chunks(text, chunk_size=3000, overlap=300):
     return chunks
 
 def extract_text_from_pdf(pdf_file):
+    """Extract text from PDF with enhanced Unicode support."""
     try:
         pdf_reader = PyPDF2.PdfReader(pdf_file)
         text = ""
@@ -91,13 +92,16 @@ def extract_text_from_pdf(pdf_file):
             try:
                 page_text = page.extract_text()
                 if page_text:
+                    # Preserve Unicode characters during extraction
                     text += f"\n--- Page {page_num + 1} ---\n{page_text}\n"
             except Exception as e:
                 st.warning(f"Error reading page {page_num + 1}: {str(e)}")
                 continue
+        
         if not text.strip():
             st.error("No text could be extracted from the PDF. The PDF might be password-protected or contain only images.")
             return None
+        
         return text
     except Exception as e:
         st.error(f"Error reading PDF file: {str(e)}")
@@ -175,13 +179,15 @@ def format_answer_for_display(answer_text):
 def clean_text(text):
     if not text:
         return ""
-    text = re.sub(r'[^\x00-\x7F]+', ' ', text)
-    text = re.sub(r'\s+', ' ', text)
+    # Remove only control characters, but preserve Unicode text
+    # Remove control characters but keep Unicode characters for non-Latin scripts
     text = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', text)
+    # Normalize whitespace
+    text = re.sub(r'\s+', ' ', text)
     return text.strip()
 
 def create_pdf_bytes(text, title="Bid Analysis Summary"):
-    """Create a simple PDF from plain text and return bytes. Uses reportlab if available."""
+    """Create a PDF with comprehensive Unicode support for all languages."""
     if not text:
         text = ""
     try:
@@ -192,35 +198,150 @@ def create_pdf_bytes(text, title="Bid Analysis Summary"):
         from reportlab.lib.enums import TA_LEFT
         from reportlab.lib.units import inch
         from reportlab.lib import utils
+        from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.ttfonts import TTFont
+        import os
+        import platform
 
         buffer = BytesIO()
         doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=36, rightMargin=36, topMargin=36, bottomMargin=36)
+        
+        # Comprehensive font registration for maximum language support
+        unicode_fonts = []
+        system = platform.system()
+        
+        # Extended font paths for comprehensive Unicode support
+        font_candidates = {
+            "Windows": [
+                # Primary Unicode fonts
+                ("NotoSans", "C:/Windows/Fonts/NotoSans-Regular.ttf"),
+                ("ArialUnicode", "C:/Windows/Fonts/ARIALUNI.TTF"),
+                ("Arial", "C:/Windows/Fonts/arial.ttf"),
+                ("Calibri", "C:/Windows/Fonts/calibri.ttf"),
+                ("Tahoma", "C:/Windows/Fonts/tahoma.ttf"),
+                ("Segoe", "C:/Windows/Fonts/segoeui.ttf"),
+                ("Verdana", "C:/Windows/Fonts/verdana.ttf"),
+                # CJK and Asian language fonts
+                ("MingLiU", "C:/Windows/Fonts/mingliu.ttc"),
+                ("SimSun", "C:/Windows/Fonts/simsun.ttc"),
+                ("Malgun", "C:/Windows/Fonts/malgun.ttf"),
+                ("Meiryo", "C:/Windows/Fonts/meiryo.ttc"),
+                # Indian language fonts
+                ("Mangal", "C:/Windows/Fonts/mangal.ttf"),
+                ("Latha", "C:/Windows/Fonts/latha.ttf"),
+                ("Shruti", "C:/Windows/Fonts/shruti.ttf"),
+                ("Tunga", "C:/Windows/Fonts/tunga.ttf"),
+                ("Raavi", "C:/Windows/Fonts/raavi.ttf"),
+                ("Kartika", "C:/Windows/Fonts/kartika.ttf"),
+            ],
+            "Darwin": [
+                ("Arial", "/System/Library/Fonts/Arial.ttf"),
+                ("ArialUnicode", "/Library/Fonts/Arial Unicode MS.ttf"),
+                ("Helvetica", "/System/Library/Fonts/Helvetica.ttc"),
+                ("AppleGothic", "/System/Library/Fonts/AppleSDGothicNeo.ttc"),
+                ("PingFang", "/System/Library/Fonts/PingFang.ttc"),
+                ("Hiragino", "/System/Library/Fonts/Hiragino Sans GB.ttc"),
+                ("NotoSans", "/Library/Fonts/NotoSans-Regular.ttf"),
+            ],
+            "Linux": [
+                ("DejaVuSans", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+                ("Liberation", "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"),
+                ("NotoSans", "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"),
+                ("NotoSansCJK", "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
+                ("Ubuntu", "/usr/share/fonts/truetype/ubuntu/Ubuntu-R.ttf"),
+                ("FreeSans", "/usr/share/fonts/truetype/freefont/FreeSans.ttf"),
+            ]
+        }
+        
+        # Register all available Unicode fonts
+        registered_fonts = []
+        platform_fonts = font_candidates.get(system, font_candidates["Linux"])
+        
+        for font_name, font_path in platform_fonts:
+            if os.path.exists(font_path):
+                try:
+                    pdfmetrics.registerFont(TTFont(font_name, font_path))
+                    registered_fonts.append(font_name)
+                except Exception as e:
+                    continue
+        
+        # Select the best available font (prioritize Noto Sans and Arial Unicode for coverage)
+        primary_font = "Helvetica"  # Fallback
+        for preferred in ["NotoSans", "ArialUnicode", "Arial", "DejaVuSans", "Liberation"]:
+            if preferred in registered_fonts:
+                primary_font = preferred
+                break
+        
+        # Create styles with the best Unicode font
         styles = getSampleStyleSheet()
-        normal = styles["Normal"]
-        heading = styles["Heading1"]
+        
+        normal_style = ParagraphStyle(
+            'UnicodeNormal',
+            parent=styles['Normal'],
+            fontName=primary_font,
+            fontSize=10,
+            leading=14,
+            spaceAfter=6,
+            wordWrap='LTR'  # Left-to-right for most languages
+        )
+        
+        heading_style = ParagraphStyle(
+            'UnicodeHeading',
+            parent=styles['Heading1'],
+            fontName=primary_font,
+            fontSize=16,
+            leading=20,
+            spaceAfter=12,
+            wordWrap='LTR'
+        )
+        
+        # Support for RTL languages if needed
+        rtl_style = ParagraphStyle(
+            'UnicodeRTL',
+            parent=normal_style,
+            alignment=2,  # Right alignment for RTL
+            wordWrap='RTL'
+        )
 
         story = []
-        story.append(Paragraph(title, heading))
+        story.append(Paragraph(title, heading_style))
         story.append(Spacer(1, 0.25 * inch))
 
-        # Preserve basic line breaks; split by double newlines into paragraphs
+        # Enhanced text processing for Unicode
         paragraphs = [p.strip() for p in text.replace('\r', '').split('\n\n') if p.strip()]
         if not paragraphs:
             paragraphs = [text]
 
-        # Use simple Paragraphs; replace lone newlines inside a paragraph with <br/>
+        # Process each paragraph with Unicode-aware handling
         for para in paragraphs:
+            if not para.strip():
+                continue
+                
+            # Minimal HTML escaping while preserving Unicode
             safe_para = para.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
             safe_para = safe_para.replace('\n', '<br/>')
-            story.append(Paragraph(safe_para, normal))
+            
+            # Detect RTL languages (Arabic, Hebrew, Urdu, etc.)
+            rtl_chars = re.findall(r'[\u0590-\u05FF\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]', safe_para)
+            
+            # Use RTL style if RTL characters are detected
+            if rtl_chars and len(rtl_chars) > len(safe_para) * 0.3:  # >30% RTL characters
+                story.append(Paragraph(safe_para, rtl_style))
+            else:
+                story.append(Paragraph(safe_para, normal_style))
+            
             story.append(Spacer(1, 0.15 * inch))
 
         doc.build(story)
         pdf_data = buffer.getvalue()
         buffer.close()
+        
         return pdf_data
-    except Exception:
-        # If reportlab is missing or any error occurs, return None to allow fallback
+        
+    except Exception as e:
+        # Enhanced error reporting for debugging
+        error_msg = f"PDF creation error: {str(e)}"
+        print(error_msg)
         return None
 
 def ask_llm(question, context, max_retries=3):
@@ -518,9 +639,9 @@ def main():
             pdf_data = create_pdf_bytes(st.session_state.summary, "Bid Analysis Summary (English)")
             if pdf_data:
                 st.download_button(
-                    label="📥 Download Original (English) as PDF",
+                    label="📥 Download Original (Multi-Language Support) as PDF",
                     data=pdf_data,
-                    file_name=f"bid_analysis_english_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                    file_name=f"bid_analysis_original_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
                     mime="application/pdf",
                     use_container_width=True
                 )
