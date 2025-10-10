@@ -308,6 +308,14 @@ def create_pdf_bytes(text, title="Bid Analysis Summary"):
         story.append(Spacer(1, 0.25 * inch))
 
         # Enhanced text processing for Unicode
+        # Ensure proper encoding for all Unicode characters
+        if isinstance(text, str):
+            # Already a string, good to go
+            pass
+        else:
+            # If it's bytes, decode it properly
+            text = text.decode('utf-8')
+            
         paragraphs = [p.strip() for p in text.replace('\r', '').split('\n\n') if p.strip()]
         if not paragraphs:
             paragraphs = [text]
@@ -639,7 +647,7 @@ def main():
             pdf_data = create_pdf_bytes(st.session_state.summary, "Bid Analysis Summary (English)")
             if pdf_data:
                 st.download_button(
-                    label="📥 Download Original (Multi-Language Support) as PDF",
+                    label="📥 Download Original Summary as PDF",
                     data=pdf_data,
                     file_name=f"bid_analysis_original_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
                     mime="application/pdf",
@@ -649,20 +657,15 @@ def main():
                 st.error("PDF generation is unavailable. Ensure 'reportlab' is installed on the server.")
         with col2:
             if "translated_text" in st.session_state and st.session_state.translated_text:
-                translated_pdf = create_pdf_bytes(
-                    st.session_state.translated_text,
-                    f"Bid Analysis Summary ({st.session_state.translated_lang})"
+                # Convert translated text to bytes for TXT download
+                translated_txt = st.session_state.translated_text.encode('utf-8')
+                st.download_button(
+                    label=f"📥 Download Translated ({st.session_state.translated_lang}) as TXT",
+                    data=translated_txt,
+                    file_name=f"bid_analysis_{st.session_state.translated_lang.lower().replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+                    mime="text/plain",
+                    use_container_width=True
                 )
-                if translated_pdf:
-                    st.download_button(
-                        label=f"📥 Download Translated ({st.session_state.translated_lang}) as PDF",
-                        data=translated_pdf,
-                        file_name=f"bid_analysis_{st.session_state.translated_lang.lower().replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
-                        mime="application/pdf",
-                        use_container_width=True
-                    )
-                else:
-                    st.error("PDF generation is unavailable for the translated summary. Ensure 'reportlab' is installed on the server.")
         
         st.subheader("🔍 Ask Questions About the Document")
         col1, col2 = st.columns([4, 1])
