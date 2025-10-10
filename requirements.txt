@@ -1,6 +1,5 @@
-streamlit
+﻿streamlit
 requests
-pymupdf
+PyPDF2
 python-dotenv
-reportlab
-
+reportlab>=3.6
