@@ -197,6 +197,7 @@ def create_pdf_bytes(text, title="Bid Analysis Summary"):
         from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
         from reportlab.lib.enums import TA_LEFT
         from reportlab.lib.units import inch
+        from reportlab.lib import utils
         from reportlab.pdfbase import pdfmetrics
         from reportlab.pdfbase.ttfonts import TTFont
         import os
@@ -206,6 +207,7 @@ def create_pdf_bytes(text, title="Bid Analysis Summary"):
         doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=36, rightMargin=36, topMargin=36, bottomMargin=36)
         
         # Comprehensive font registration for maximum language support
+        unicode_fonts = []
         system = platform.system()
         
         # Extended font paths for comprehensive Unicode support
@@ -260,7 +262,7 @@ def create_pdf_bytes(text, title="Bid Analysis Summary"):
                 try:
                     pdfmetrics.registerFont(TTFont(font_name, font_path))
                     registered_fonts.append(font_name)
-                except Exception:
+                except Exception as e:
                     continue
         
         # Select the best available font (prioritize Noto Sans and Arial Unicode for coverage)
@@ -307,7 +309,10 @@ def create_pdf_bytes(text, title="Bid Analysis Summary"):
 
         # Enhanced text processing for Unicode
         # Ensure proper encoding for all Unicode characters
-        if not isinstance(text, str):
+        if isinstance(text, str):
+            # Already a string, good to go
+            pass
+        else:
             # If it's bytes, decode it properly
             text = text.decode('utf-8')
             
@@ -639,7 +644,6 @@ def main():
         st.subheader("⬇️ Download Summaries")
         col1, col2 = st.columns(2)
         with col1:
-            # Try to generate PDF, but also provide TXT as fallback
             pdf_data = create_pdf_bytes(st.session_state.summary, "Bid Analysis Summary (English)")
             if pdf_data:
                 st.download_button(
@@ -650,15 +654,7 @@ def main():
                     use_container_width=True
                 )
             else:
-                # Fallback to TXT if PDF generation fails
-                original_txt = st.session_state.summary.encode('utf-8')
-                st.download_button(
-                    label="📥 Download Original Summary as TXT (PDF unavailable)",
-                    data=original_txt,
-                    file_name=f"bid_analysis_original_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
-                    mime="text/plain",
-                    use_container_width=True
-                )
+                st.error("PDF generation is unavailable. Ensure 'reportlab' is installed on the server.")
         with col2:
             if "translated_text" in st.session_state and st.session_state.translated_text:
                 # Convert translated text to bytes for TXT download
