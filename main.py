@@ -644,6 +644,7 @@ def main():
         st.subheader("⬇️ Download Summaries")
         col1, col2 = st.columns(2)
         with col1:
+            # Try to generate PDF, but also provide TXT as fallback
             pdf_data = create_pdf_bytes(st.session_state.summary, "Bid Analysis Summary (English)")
             if pdf_data:
                 st.download_button(
@@ -654,7 +655,15 @@ def main():
                     use_container_width=True
                 )
             else:
-                st.error("PDF generation is unavailable. Ensure 'reportlab' is installed on the server.")
+                # Fallback to TXT if PDF generation fails
+                original_txt = st.session_state.summary.encode('utf-8')
+                st.download_button(
+                    label="📥 Download Original Summary as TXT (PDF unavailable)",
+                    data=original_txt,
+                    file_name=f"bid_analysis_original_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+                    mime="text/plain",
+                    use_container_width=True
+                )
         with col2:
             if "translated_text" in st.session_state and st.session_state.translated_text:
                 # Convert translated text to bytes for TXT download
