@@ -8,7 +8,6 @@ import time
 from datetime import datetime
 import json
 import streamlit.components.v1 as components
-from io import BytesIO
 
 # Load environment variables
 load_dotenv()
@@ -84,7 +83,6 @@ def split_text_into_chunks(text, chunk_size=3000, overlap=300):
     return chunks
 
 def extract_text_from_pdf(pdf_file):
-    """Extract text from PDF with enhanced Unicode support."""
     try:
         pdf_reader = PyPDF2.PdfReader(pdf_file)
         text = ""
@@ -92,16 +90,13 @@ def extract_text_from_pdf(pdf_file):
             try:
                 page_text = page.extract_text()
                 if page_text:
-                    # Preserve Unicode characters during extraction
                     text += f"\n--- Page {page_num + 1} ---\n{page_text}\n"
             except Exception as e:
                 st.warning(f"Error reading page {page_num + 1}: {str(e)}")
                 continue
-        
         if not text.strip():
             st.error("No text could be extracted from the PDF. The PDF might be password-protected or contain only images.")
             return None
-        
         return text
     except Exception as e:
         st.error(f"Error reading PDF file: {str(e)}")
@@ -179,203 +174,26 @@ def format_answer_for_display(answer_text):
 def clean_text(text):
     if not text:
         return ""
-    # Remove only control characters, but preserve Unicode text
-    # Remove control characters but keep Unicode characters for non-Latin scripts
-    text = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', text)
-    # Normalize whitespace
+    text = re.sub(r'[^\x00-\x7F]+', ' ', text)
     text = re.sub(r'\s+', ' ', text)
+    text = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', text)
     return text.strip()
-
-def create_pdf_bytes(text, title="Bid Analysis Summary"):
-    """Create a PDF with comprehensive Unicode support for all languages."""
-    if not text:
-        text = ""
-    try:
-        # Lazy import so the app still runs if reportlab isn't installed
-        from reportlab.lib.pagesizes import A4
-        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-        from reportlab.lib.enums import TA_LEFT
-        from reportlab.lib.units import inch
-        from reportlab.lib import utils
-        from reportlab.pdfbase import pdfmetrics
-        from reportlab.pdfbase.ttfonts import TTFont
-        import os
-        import platform
-
-        buffer = BytesIO()
-        doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=36, rightMargin=36, topMargin=36, bottomMargin=36)
-        
-        # Comprehensive font registration for maximum language support
-        unicode_fonts = []
-        system = platform.system()
-        
-        # Extended font paths for comprehensive Unicode support
-        font_candidates = {
-            "Windows": [
-                # Primary Unicode fonts
-                ("NotoSans", "C:/Windows/Fonts/NotoSans-Regular.ttf"),
-                ("ArialUnicode", "C:/Windows/Fonts/ARIALUNI.TTF"),
-                ("Arial", "C:/Windows/Fonts/arial.ttf"),
-                ("Calibri", "C:/Windows/Fonts/calibri.ttf"),
-                ("Tahoma", "C:/Windows/Fonts/tahoma.ttf"),
-                ("Segoe", "C:/Windows/Fonts/segoeui.ttf"),
-                ("Verdana", "C:/Windows/Fonts/verdana.ttf"),
-                # CJK and Asian language fonts
-                ("MingLiU", "C:/Windows/Fonts/mingliu.ttc"),
-                ("SimSun", "C:/Windows/Fonts/simsun.ttc"),
-                ("Malgun", "C:/Windows/Fonts/malgun.ttf"),
-                ("Meiryo", "C:/Windows/Fonts/meiryo.ttc"),
-                # Indian language fonts
-                ("Mangal", "C:/Windows/Fonts/mangal.ttf"),
-                ("Latha", "C:/Windows/Fonts/latha.ttf"),
-                ("Shruti", "C:/Windows/Fonts/shruti.ttf"),
-                ("Tunga", "C:/Windows/Fonts/tunga.ttf"),
-                ("Raavi", "C:/Windows/Fonts/raavi.ttf"),
-                ("Kartika", "C:/Windows/Fonts/kartika.ttf"),
-            ],
-            "Darwin": [
-                ("Arial", "/System/Library/Fonts/Arial.ttf"),
-                ("ArialUnicode", "/Library/Fonts/Arial Unicode MS.ttf"),
-                ("Helvetica", "/System/Library/Fonts/Helvetica.ttc"),
-                ("AppleGothic", "/System/Library/Fonts/AppleSDGothicNeo.ttc"),
-                ("PingFang", "/System/Library/Fonts/PingFang.ttc"),
-                ("Hiragino", "/System/Library/Fonts/Hiragino Sans GB.ttc"),
-                ("NotoSans", "/Library/Fonts/NotoSans-Regular.ttf"),
-            ],
-            "Linux": [
-                ("DejaVuSans", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
-                ("Liberation", "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"),
-                ("NotoSans", "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"),
-                ("NotoSansCJK", "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
-                ("Ubuntu", "/usr/share/fonts/truetype/ubuntu/Ubuntu-R.ttf"),
-                ("FreeSans", "/usr/share/fonts/truetype/freefont/FreeSans.ttf"),
-            ]
-        }
-        
-        # Register all available Unicode fonts
-        registered_fonts = []
-        platform_fonts = font_candidates.get(system, font_candidates["Linux"])
-        
-        for font_name, font_path in platform_fonts:
-            if os.path.exists(font_path):
-                try:
-                    pdfmetrics.registerFont(TTFont(font_name, font_path))
-                    registered_fonts.append(font_name)
-                except Exception as e:
-                    continue
-        
-        # Select the best available font (prioritize Noto Sans and Arial Unicode for coverage)
-        primary_font = "Helvetica"  # Fallback
-        for preferred in ["NotoSans", "ArialUnicode", "Arial", "DejaVuSans", "Liberation"]:
-            if preferred in registered_fonts:
-                primary_font = preferred
-                break
-        
-        # Create styles with the best Unicode font
-        styles = getSampleStyleSheet()
-        
-        normal_style = ParagraphStyle(
-            'UnicodeNormal',
-            parent=styles['Normal'],
-            fontName=primary_font,
-            fontSize=10,
-            leading=14,
-            spaceAfter=6,
-            wordWrap='LTR'  # Left-to-right for most languages
-        )
-        
-        heading_style = ParagraphStyle(
-            'UnicodeHeading',
-            parent=styles['Heading1'],
-            fontName=primary_font,
-            fontSize=16,
-            leading=20,
-            spaceAfter=12,
-            wordWrap='LTR'
-        )
-        
-        # Support for RTL languages if needed
-        rtl_style = ParagraphStyle(
-            'UnicodeRTL',
-            parent=normal_style,
-            alignment=2,  # Right alignment for RTL
-            wordWrap='RTL'
-        )
-
-        story = []
-        story.append(Paragraph(title, heading_style))
-        story.append(Spacer(1, 0.25 * inch))
-
-        # Enhanced text processing for Unicode
-        # Ensure proper encoding for all Unicode characters
-        if isinstance(text, str):
-            # Already a string, good to go
-            pass
-        else:
-            # If it's bytes, decode it properly
-            text = text.decode('utf-8')
-            
-        paragraphs = [p.strip() for p in text.replace('\r', '').split('\n\n') if p.strip()]
-        if not paragraphs:
-            paragraphs = [text]
-
-        # Process each paragraph with Unicode-aware handling
-        for para in paragraphs:
-            if not para.strip():
-                continue
-                
-            # Minimal HTML escaping while preserving Unicode
-            safe_para = para.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-            safe_para = safe_para.replace('\n', '<br/>')
-            
-            # Detect RTL languages (Arabic, Hebrew, Urdu, etc.)
-            rtl_chars = re.findall(r'[\u0590-\u05FF\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]', safe_para)
-            
-            # Use RTL style if RTL characters are detected
-            if rtl_chars and len(rtl_chars) > len(safe_para) * 0.3:  # >30% RTL characters
-                story.append(Paragraph(safe_para, rtl_style))
-            else:
-                story.append(Paragraph(safe_para, normal_style))
-            
-            story.append(Spacer(1, 0.15 * inch))
-
-        doc.build(story)
-        pdf_data = buffer.getvalue()
-        buffer.close()
-        
-        return pdf_data
-        
-    except Exception as e:
-        # Enhanced error reporting for debugging
-        error_msg = f"PDF creation error: {str(e)}"
-        print(error_msg)
-        return None
 
 def ask_llm(question, context, max_retries=3):
     if not GROQ_API_KEY:
         return "Error: GROQ_API_KEY not found in environment variables."
+    if not context or not context.strip():
+        return "Error: No context provided for analysis."
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-    # Allow prompt-only calls when context is empty
-    if context and context.strip():
-        user_content = f"Document Content:\n{context}\n\nQuestion: {question}\n\nPlease provide a detailed and structured response based on the document content."
-    else:
-        user_content = f"{question}"
     messages = [
         {"role": "system", "content": "You are an expert document analyst specializing in bid and tender documents. Provide clear, accurate, and structured responses based on the document content. If information is not found, clearly state that."},
-        {"role": "user", "content": user_content}
+        {"role": "user", "content": f"Document Content:\n{context}\n\nQuestion: {question}\n\nPlease provide a detailed and structured response based on the document content."}
     ]
-    data = {"model": "llama-3.1-8b-instant", "messages": messages, "temperature": 0.3, "max_tokens": 1000}
+    data = {"model": "llama3-8b-8192", "messages": messages, "temperature": 0.3, "max_tokens": 1000}
     last_error = None
     for attempt in range(max_retries):
         try:
             response = requests.post(GROQ_API_URL, headers=headers, json=data, timeout=30)
-            if response.status_code >= 400:
-                try:
-                    err_json = response.json()
-                    return f"Error: {response.status_code} - {err_json.get('error', {}).get('message') or err_json}"
-                except Exception:
-                    return f"Error: {response.status_code} - {response.text}"
             response.raise_for_status()
             response_data = response.json()
             if 'choices' in response_data and len(response_data['choices']) > 0:
@@ -407,15 +225,9 @@ def translate_text_with_llm(text_to_translate, target_language):
         {"role": "system", "content": f"You are an expert translator. Your task is to translate English text into {target_language} accurately."},
         {"role": "user", "content": prompt}
     ]
-    data = {"model": "llama-3.1-8b-instant", "messages": messages, "temperature": 0.1, "max_tokens": 2000}
+    data = {"model": "llama3-8b-8192", "messages": messages, "temperature": 0.1, "max_tokens": 2000}
     try:
         response = requests.post(GROQ_API_URL, headers=headers, json=data, timeout=45)
-        if response.status_code >= 400:
-            try:
-                err_json = response.json()
-                return f"Error during translation API call: {response.status_code} - {err_json.get('error', {}).get('message') or err_json}"
-            except Exception:
-                return f"Error during translation API call: {response.status_code} - {response.text}"
         response.raise_for_status()
         response_data = response.json()
         if 'choices' in response_data and len(response_data['choices']) > 0:
@@ -444,10 +256,9 @@ def generate_comprehensive_summary(text_chunks):
                 continue
     if not all_summaries:
         return "Unable to generate summary due to processing errors."
-    final_summary_prompt = "Create a single comprehensive summary by combining and deduplicating the information below. Keep the same structure and keep only the most complete and accurate information for each field."
-    consolidation_context = chr(10).join([f"Section {i+1}:\n{summary}\n" for i, summary in enumerate(all_summaries)])
+    final_summary_prompt = f"""Based on the following analysis sections from the same document, create a single comprehensive summary by combining and deduplicating the information:\n\n{chr(10).join([f"Section {i+1}:\n{summary}\n" for i, summary in enumerate(all_summaries)])}\n\nProvide a final consolidated summary with the same structure, keeping only the most complete and accurate information for each field."""
     try:
-        final_summary = ask_llm(final_summary_prompt, consolidation_context)
+        final_summary = ask_llm(final_summary_prompt, "")
         return final_summary if not final_summary.startswith("Error") else all_summaries[0]
     except:
         return all_summaries[0] if all_summaries else "Summary generation failed."
@@ -472,10 +283,9 @@ def answer_question_from_chunks(question, text_chunks):
         return "No relevant information found in the document to answer your question."
     if len(relevant_answers) == 1:
         return relevant_answers[0]
-    combined_prompt = "Provide a comprehensive answer by combining the relevant information from the provided sections, removing duplicates and contradictions."
-    combined_context = f"Question: {question}\n\n" + chr(10).join([f"Section {i+1}: {answer}" for i, answer in enumerate(relevant_answers)])
+    combined_prompt = f"Question: {question}\n\nMultiple relevant sections found:\n{chr(10).join([f'Section {i+1}: {answer}' for i, answer in enumerate(relevant_answers)])}\n\nProvide a comprehensive answer by combining the relevant information from all sections, removing duplicates and contradictions."
     try:
-        final_answer = ask_llm(combined_prompt, combined_context)
+        final_answer = ask_llm(combined_prompt, "")
         return final_answer if not final_answer.startswith("Error") else relevant_answers[0]
     except:
         return relevant_answers[0]
@@ -644,33 +454,18 @@ def main():
         st.subheader("⬇️ Download Summaries")
         col1, col2 = st.columns(2)
         with col1:
-            # Try to generate PDF, but also provide TXT as fallback
-            pdf_data = create_pdf_bytes(st.session_state.summary, "Bid Analysis Summary (English)")
-            if pdf_data:
-                st.download_button(
-                    label="📥 Download Original Summary as PDF",
-                    data=pdf_data,
-                    file_name=f"bid_analysis_original_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
-                    mime="application/pdf",
-                    use_container_width=True
-                )
-            else:
-                # Fallback to TXT if PDF generation fails
-                original_txt = st.session_state.summary.encode('utf-8')
-                st.download_button(
-                    label="📥 Download Original Summary as TXT (PDF unavailable)",
-                    data=original_txt,
-                    file_name=f"bid_analysis_original_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
-                    mime="text/plain",
-                    use_container_width=True
-                )
+            st.download_button(
+                label="📥 Download Original (English)",
+                data=st.session_state.summary,
+                file_name=f"bid_analysis_english_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+                mime="text/plain",
+                use_container_width=True
+            )
         with col2:
             if "translated_text" in st.session_state and st.session_state.translated_text:
-                # Convert translated text to bytes for TXT download
-                translated_txt = st.session_state.translated_text.encode('utf-8')
                 st.download_button(
-                    label=f"📥 Download Translated ({st.session_state.translated_lang}) as TXT",
-                    data=translated_txt,
+                    label=f"📥 Download Translated ({st.session_state.translated_lang})",
+                    data=st.session_state.translated_text,
                     file_name=f"bid_analysis_{st.session_state.translated_lang.lower().replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
                     mime="text/plain",
                     use_container_width=True
