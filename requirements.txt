@@ -1,7 +1,5 @@
-﻿streamlit
+streamlit
 requests
-PyPDF2
+pymupdf
 python-dotenv
-
-
-
+reportlab
