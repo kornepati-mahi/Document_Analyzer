@@ -197,4 +197,507 @@ def create_pdf_bytes(text, title="Bid Analysis Summary"):
         from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
         from reportlab.lib.enums import TA_LEFT
         from reportlab.lib.units import inch
-        from reportlab.lib import utils
+        from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.ttfonts import TTFont
+        import os
+        import platform
+
+        buffer = BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=36, rightMargin=36, topMargin=36, bottomMargin=36)
+        
+        # Comprehensive font registration for maximum language support
+        system = platform.system()
+        
+        # Extended font paths for comprehensive Unicode support
+        font_candidates = {
+            "Windows": [
+                # Primary Unicode fonts
+                ("NotoSans", "C:/Windows/Fonts/NotoSans-Regular.ttf"),
+                ("ArialUnicode", "C:/Windows/Fonts/ARIALUNI.TTF"),
+                ("Arial", "C:/Windows/Fonts/arial.ttf"),
+                ("Calibri", "C:/Windows/Fonts/calibri.ttf"),
+                ("Tahoma", "C:/Windows/Fonts/tahoma.ttf"),
+                ("Segoe", "C:/Windows/Fonts/segoeui.ttf"),
+                ("Verdana", "C:/Windows/Fonts/verdana.ttf"),
+                # CJK and Asian language fonts
+                ("MingLiU", "C:/Windows/Fonts/mingliu.ttc"),
+                ("SimSun", "C:/Windows/Fonts/simsun.ttc"),
+                ("Malgun", "C:/Windows/Fonts/malgun.ttf"),
+                ("Meiryo", "C:/Windows/Fonts/meiryo.ttc"),
+                # Indian language fonts
+                ("Mangal", "C:/Windows/Fonts/mangal.ttf"),
+                ("Latha", "C:/Windows/Fonts/latha.ttf"),
+                ("Shruti", "C:/Windows/Fonts/shruti.ttf"),
+                ("Tunga", "C:/Windows/Fonts/tunga.ttf"),
+                ("Raavi", "C:/Windows/Fonts/raavi.ttf"),
+                ("Kartika", "C:/Windows/Fonts/kartika.ttf"),
+            ],
+            "Darwin": [
+                ("Arial", "/System/Library/Fonts/Arial.ttf"),
+                ("ArialUnicode", "/Library/Fonts/Arial Unicode MS.ttf"),
+                ("Helvetica", "/System/Library/Fonts/Helvetica.ttc"),
+                ("AppleGothic", "/System/Library/Fonts/AppleSDGothicNeo.ttc"),
+                ("PingFang", "/System/Library/Fonts/PingFang.ttc"),
+                ("Hiragino", "/System/Library/Fonts/Hiragino Sans GB.ttc"),
+                ("NotoSans", "/Library/Fonts/NotoSans-Regular.ttf"),
+            ],
+            "Linux": [
+                ("DejaVuSans", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+                ("Liberation", "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"),
+                ("NotoSans", "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"),
+                ("NotoSansCJK", "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
+                ("Ubuntu", "/usr/share/fonts/truetype/ubuntu/Ubuntu-R.ttf"),
+                ("FreeSans", "/usr/share/fonts/truetype/freefont/FreeSans.ttf"),
+            ]
+        }
+        
+        # Register all available Unicode fonts
+        registered_fonts = []
+        platform_fonts = font_candidates.get(system, font_candidates["Linux"])
+        
+        for font_name, font_path in platform_fonts:
+            if os.path.exists(font_path):
+                try:
+                    pdfmetrics.registerFont(TTFont(font_name, font_path))
+                    registered_fonts.append(font_name)
+                except Exception:
+                    continue
+        
+        # Select the best available font (prioritize Noto Sans and Arial Unicode for coverage)
+        primary_font = "Helvetica"  # Fallback
+        for preferred in ["NotoSans", "ArialUnicode", "Arial", "DejaVuSans", "Liberation"]:
+            if preferred in registered_fonts:
+                primary_font = preferred
+                break
+        
+        # Create styles with the best Unicode font
+        styles = getSampleStyleSheet()
+        
+        normal_style = ParagraphStyle(
+            'UnicodeNormal',
+            parent=styles['Normal'],
+            fontName=primary_font,
+            fontSize=10,
+            leading=14,
+            spaceAfter=6,
+            wordWrap='LTR'  # Left-to-right for most languages
+        )
+        
+        heading_style = ParagraphStyle(
+            'UnicodeHeading',
+            parent=styles['Heading1'],
+            fontName=primary_font,
+            fontSize=16,
+            leading=20,
+            spaceAfter=12,
+            wordWrap='LTR'
+        )
+        
+        # Support for RTL languages if needed
+        rtl_style = ParagraphStyle(
+            'UnicodeRTL',
+            parent=normal_style,
+            alignment=2,  # Right alignment for RTL
+            wordWrap='RTL'
+        )
+
+        story = []
+        story.append(Paragraph(title, heading_style))
+        story.append(Spacer(1, 0.25 * inch))
+
+        # Enhanced text processing for Unicode
+        # Ensure proper encoding for all Unicode characters
+        if not isinstance(text, str):
+            # If it's bytes, decode it properly
+            text = text.decode('utf-8')
+            
+        paragraphs = [p.strip() for p in text.replace('\r', '').split('\n\n') if p.strip()]
+        if not paragraphs:
+            paragraphs = [text]
+
+        # Process each paragraph with Unicode-aware handling
+        for para in paragraphs:
+            if not para.strip():
+                continue
+                
+            # Minimal HTML escaping while preserving Unicode
+            safe_para = para.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+            safe_para = safe_para.replace('\n', '<br/>')
+            
+            # Detect RTL languages (Arabic, Hebrew, Urdu, etc.)
+            rtl_chars = re.findall(r'[\u0590-\u05FF\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]', safe_para)
+            
+            # Use RTL style if RTL characters are detected
+            if rtl_chars and len(rtl_chars) > len(safe_para) * 0.3:  # >30% RTL characters
+                story.append(Paragraph(safe_para, rtl_style))
+            else:
+                story.append(Paragraph(safe_para, normal_style))
+            
+            story.append(Spacer(1, 0.15 * inch))
+
+        doc.build(story)
+        pdf_data = buffer.getvalue()
+        buffer.close()
+        
+        return pdf_data
+        
+    except Exception as e:
+        # Enhanced error reporting for debugging
+        error_msg = f"PDF creation error: {str(e)}"
+        print(error_msg)
+        return None
+
+def ask_llm(question, context, max_retries=3):
+    if not GROQ_API_KEY:
+        return "Error: GROQ_API_KEY not found in environment variables."
+    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+    # Allow prompt-only calls when context is empty
+    if context and context.strip():
+        user_content = f"Document Content:\n{context}\n\nQuestion: {question}\n\nPlease provide a detailed and structured response based on the document content."
+    else:
+        user_content = f"{question}"
+    messages = [
+        {"role": "system", "content": "You are an expert document analyst specializing in bid and tender documents. Provide clear, accurate, and structured responses based on the document content. If information is not found, clearly state that."},
+        {"role": "user", "content": user_content}
+    ]
+    data = {"model": "llama-3.1-8b-instant", "messages": messages, "temperature": 0.3, "max_tokens": 1000}
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(GROQ_API_URL, headers=headers, json=data, timeout=30)
+            if response.status_code >= 400:
+                try:
+                    err_json = response.json()
+                    return f"Error: {response.status_code} - {err_json.get('error', {}).get('message') or err_json}"
+                except Exception:
+                    return f"Error: {response.status_code} - {response.text}"
+            response.raise_for_status()
+            response_data = response.json()
+            if 'choices' in response_data and len(response_data['choices']) > 0:
+                return response_data["choices"][0]["message"]["content"]
+            else:
+                return "Error: Invalid response format from API."
+        except requests.exceptions.HTTPError as e:
+            last_error = f"HTTP Error {response.status_code}: {str(e)}"
+            if response.status_code == 429:
+                time.sleep(min(2 ** attempt, 10))
+                continue
+            elif response.status_code == 401:
+                return "Error: Invalid API key. Please check your GROQ_API_KEY."
+            else:
+                time.sleep(1)
+                continue
+        except Exception as e:
+            last_error = f"Unexpected Error: {str(e)}"
+            time.sleep(1)
+            continue
+    return f"Error after {max_retries} attempts: {last_error}"
+
+def translate_text_with_llm(text_to_translate, target_language):
+    if not GROQ_API_KEY:
+        return "Error: GROQ_API_KEY not found. Cannot translate."
+    prompt = f"""Translate the following English text to {target_language}. Provide ONLY the translated text, without any introductory phrases, explanations, or quotation marks. Text to translate:\n---\n{text_to_translate}\n---"""
+    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+    messages = [
+        {"role": "system", "content": f"You are an expert translator. Your task is to translate English text into {target_language} accurately."},
+        {"role": "user", "content": prompt}
+    ]
+    data = {"model": "llama-3.1-8b-instant", "messages": messages, "temperature": 0.1, "max_tokens": 2000}
+    try:
+        response = requests.post(GROQ_API_URL, headers=headers, json=data, timeout=45)
+        if response.status_code >= 400:
+            try:
+                err_json = response.json()
+                return f"Error during translation API call: {response.status_code} - {err_json.get('error', {}).get('message') or err_json}"
+            except Exception:
+                return f"Error during translation API call: {response.status_code} - {response.text}"
+        response.raise_for_status()
+        response_data = response.json()
+        if 'choices' in response_data and len(response_data['choices']) > 0:
+            return response_data["choices"][0]["message"]["content"]
+        else:
+            return "Error: Could not get a valid translation from the API."
+    except Exception as e:
+        return f"Error during translation API call: {str(e)}"
+
+def generate_comprehensive_summary(text_chunks):
+    if not text_chunks:
+        return "No content available for summarization."
+    summary_prompt = """Analyze this bid/tender document and extract the following key information. If any information is not found, clearly state "Not mentioned" or "Not found":\n\n**BASIC INFORMATION:**\n- Tender Number/Reference:\n- Name of Work/Project:\n- Issuing Department/Organization:\n\n**FINANCIAL DETAILS:**\n- Estimated Contract Value:\n- EMD (Earnest Money Deposit):\n- EMD Exemption (if any):\n- Performance Security:\n\n**TIMELINE:**\n- Bid Submission Deadline:\n- Technical Bid Opening:\n- Contract Duration:\n\n**REQUIREMENTS:**\n- Key Eligibility Criteria:\n- Required Documents:\n- Technical Specifications (brief):\n- Payment Terms:\n\nProvide only the information that is clearly mentioned in the document."""
+    all_summaries = []
+    with st.spinner("Analyzing document sections..."):
+        progress_bar = st.progress(0)
+        for i, chunk in enumerate(text_chunks):
+            try:
+                summary = ask_llm(summary_prompt, chunk)
+                if not summary.startswith("Error"):
+                    all_summaries.append(summary)
+                progress_bar.progress((i + 1) / len(text_chunks))
+                time.sleep(1.2)
+            except Exception as e:
+                st.warning(f"Error processing chunk {i+1}: {str(e)}")
+                continue
+    if not all_summaries:
+        return "Unable to generate summary due to processing errors."
+    final_summary_prompt = "Create a single comprehensive summary by combining and deduplicating the information below. Keep the same structure and keep only the most complete and accurate information for each field."
+    consolidation_context = chr(10).join([f"Section {i+1}:\n{summary}\n" for i, summary in enumerate(all_summaries)])
+    try:
+        final_summary = ask_llm(final_summary_prompt, consolidation_context)
+        return final_summary if not final_summary.startswith("Error") else all_summaries[0]
+    except:
+        return all_summaries[0] if all_summaries else "Summary generation failed."
+
+def answer_question_from_chunks(question, text_chunks):
+    if not text_chunks:
+        return "No document content available to answer the question."
+    relevant_answers = []
+    with st.spinner("Searching through document..."):
+        progress_bar = st.progress(0)
+        for i, chunk in enumerate(text_chunks):
+            try:
+                answer = ask_llm(question, chunk)
+                if (not answer.startswith("Error") and "not found" not in answer.lower() and "not mentioned" not in answer.lower() and len(answer.strip()) > 20):
+                    relevant_answers.append(answer)
+                progress_bar.progress((i + 1) / len(text_chunks))
+                time.sleep(1.2)
+            except Exception as e:
+                st.warning(f"Error processing chunk {i+1}: {str(e)}")
+                continue
+    if not relevant_answers:
+        return "No relevant information found in the document to answer your question."
+    if len(relevant_answers) == 1:
+        return relevant_answers[0]
+    combined_prompt = "Provide a comprehensive answer by combining the relevant information from the provided sections, removing duplicates and contradictions."
+    combined_context = f"Question: {question}\n\n" + chr(10).join([f"Section {i+1}: {answer}" for i, answer in enumerate(relevant_answers)])
+    try:
+        final_answer = ask_llm(combined_prompt, combined_context)
+        return final_answer if not final_answer.startswith("Error") else relevant_answers[0]
+    except:
+        return relevant_answers[0]
+
+def main():
+    if 'qa_history' not in st.session_state:
+        st.session_state.qa_history = []
+    
+    st.markdown("""<div class="main-header"><h1>📊 Bid Analyser Pro</h1><p>Advanced Document Analysis & Q&A System</p></div>""", unsafe_allow_html=True)
+
+    with st.sidebar:
+        st.header("🔧 Controls")
+        
+        st.subheader("📁 Upload Document")
+        uploaded_file = st.file_uploader("Choose a PDF or TXT file", type=["pdf", "txt"], help="Upload your bid document for analysis")
+        
+        st.subheader("⚡ Quick Actions")
+        if st.button("🔄 Clear Analysis", use_container_width=True):
+            keys_to_clear = ["summary", "cleaned_text", "text_chunks", "user_question", "answer", "last_uploaded_file", "qa_history", "translated_text", "translated_lang"]
+            for key in keys_to_clear:
+                st.session_state.pop(key, None)
+            st.rerun()
+
+        # --- NEW DROPDOWN TRANSLATION WIDGET ---
+        if "summary" in st.session_state and st.session_state.summary and not st.session_state.summary.startswith("Error"):
+            st.subheader("🗣️ Translate Summary")
+
+            # --- MODIFIED: EXPANDED DICTIONARY OF LANGUAGES ---
+            LANGUAGES = {
+                # Indian Languages
+                "Assamese": "Assamese",
+                "Bengali": "Bengali",
+                "Bodo": "Bodo",
+                "Dogri": "Dogri",
+                "Hindi": "Hindi",
+                "Kashmiri": "Kashmiri",
+                "Konkani": "Konkani",
+                "Maithili": "Maithili",
+                "Manipuri": "Manipuri",
+                "Nepali": "Nepali",
+                "Odia": "odia",
+                "Sanskrit": "Sanskrit",
+                "Santali": "Santali",
+                "Sindhi": "Sindhi",
+                "Urdu": "urdu",
+                "Bengali": "Bengali",
+                "Telugu": "Telugu",
+                "Marathi": "Marathi",
+                "Tamil": "Tamil",
+                "Kannada": "Kannada",
+                "Malayalam": "Malayalam",
+                "Punjabi": "Punjabi",
+                "Gujarati": "Gujarati",
+                # World Languages
+                "English": "English",
+                "Turkish": "Turkish",
+                "Italian": "Italian",
+                "Korean": "Korean",
+                "Turkish": "Turkish",
+                "Spanish": "Spanish",
+                "French": "French",
+                "German": "German",
+                "Mandarin Chinese": "Mandarin Chinese",
+                "Japanese": "Japanese",
+                "Russian": "Russian",
+                "Arabic": "Arabic",
+                "Portuguese": "Portuguese",
+                "Dutch": "Dutch",
+                "Polish": "Polish",
+                "Swedish": "Swedish",
+                "Greek": "Greek",
+                "Hebrew": "Hebrew",
+                "Vietnamese": "Vietnamese",
+                "Thai": "Thai",
+                "Indonesian": "Indonesian",
+                "Ukrainian": "Ukrainian",
+                "Romanian": "Romanian",
+                "Czech": "Czech",
+                "Hungarian": "Hungarian",
+                "Finnish": "Finnish", 
+            }
+
+            selected_language = st.selectbox(
+                "Select a language:",
+                options=list(LANGUAGES.keys())
+            )
+
+            if st.button("Translate", use_container_width=True, type="primary"):
+                if selected_language:
+                    with st.spinner(f"Translating to {selected_language}..."):
+                        formal_language_name = LANGUAGES[selected_language]
+                        translated_text = translate_text_with_llm(st.session_state.summary, formal_language_name)
+                        st.session_state.translated_text = translated_text
+                        st.session_state.translated_lang = selected_language
+                        st.rerun()
+        # --- END OF NEW WIDGET ---
+            
+        st.subheader("💡 Sample Questions")
+        sample_questions = ["What is the tender deadline?", "What are the eligibility criteria?", "What is the contract value?"]
+        for question in sample_questions:
+            if st.button(question, use_container_width=True):
+                st.session_state.user_question = question
+
+    # Main content area
+    uploaded_filename = uploaded_file.name if uploaded_file else None
+    if st.session_state.get("last_uploaded_file") != uploaded_filename:
+        st.session_state["last_uploaded_file"] = uploaded_filename
+        keys_to_clear = ["summary", "cleaned_text", "text_chunks", "user_question", "answer", "translated_text", "translated_lang"]
+        for key in keys_to_clear:
+            st.session_state.pop(key, None)
+
+    if not uploaded_file:
+        st.markdown("""<div class="upload-section"><h2>📤 Upload Your Bid Document</h2><p>Drag and drop a PDF or TXT file to get started with the analysis</p><p><em>Supported formats: PDF, TXT • Max size: 200MB</em></p></div>""", unsafe_allow_html=True)
+        col1, col2, col3 = st.columns(3)
+        with col1: st.markdown("### 🎯 Key Information Extraction\n- Tender Number & Details\n- Contract Value & EMD")
+        with col2: st.markdown("### 🤖 AI-Powered Analysis\n- Intelligent Q&A System\n- Document Summarization")
+        with col3: st.markdown("### 📊 Advanced Features\n- Error Handling & Retries\n- Progress Tracking")
+
+    if uploaded_file and "cleaned_text" not in st.session_state:
+        with st.spinner("🔄 Processing document..."):
+            progress_bar = st.progress(0)
+            try:
+                if uploaded_file.type == "application/pdf":
+                    raw_text = extract_text_from_pdf(uploaded_file)
+                else:
+                    raw_text = uploaded_file.getvalue().decode("utf-8", errors='replace')
+                progress_bar.progress(25)
+                
+                if not raw_text: st.stop()
+
+                cleaned_text = clean_text(raw_text)
+                progress_bar.progress(50)
+                
+                if not cleaned_text or len(cleaned_text.strip()) < 100:
+                    st.error("Document appears to be empty or too short for analysis."); st.stop()
+                st.session_state.cleaned_text = cleaned_text
+                
+                text_chunks = split_text_into_chunks(cleaned_text)
+                progress_bar.progress(75)
+                
+                if not text_chunks:
+                    st.error("Unable to process document into analyzable chunks."); st.stop()
+                st.session_state.text_chunks = text_chunks
+                
+                summary = generate_comprehensive_summary(text_chunks)
+                st.session_state.summary = summary
+                progress_bar.progress(100)
+            except Exception as e:
+                st.error(f"Error processing document: {str(e)}"); st.stop()
+        
+        st.success("✅ Document processed successfully!")
+        st.rerun()
+
+    if "cleaned_text" in st.session_state:
+        st.subheader("📋 Document Analysis Summary")
+        if st.session_state.summary.startswith("Error"):
+            st.markdown(f'<div class="error-card"><h4>⚠️ Summary Generation Error:</h4><p>{st.session_state.summary}</p></div>', unsafe_allow_html=True)
+        else:
+            formatted_summary = format_summary_for_display(st.session_state.summary)
+            st.markdown(f'<div class="summary-card">{formatted_summary}</div>', unsafe_allow_html=True)
+
+        if "translated_text" in st.session_state:
+            st.subheader(f"✅ Translated Summary ({st.session_state.translated_lang})")
+            st.markdown(f"""<style>.translated-card {{ border-left: 5px solid #28a745; }}</style><div class="summary-card translated-card"><p>{st.session_state.translated_text.replace(chr(10), '<br>')}</p></div>""", unsafe_allow_html=True)
+        
+        st.subheader("⬇️ Download Summaries")
+        col1, col2 = st.columns(2)
+        with col1:
+            # Try to generate PDF, but also provide TXT as fallback
+            pdf_data = create_pdf_bytes(st.session_state.summary, "Bid Analysis Summary (English)")
+            if pdf_data:
+                st.download_button(
+                    label="📥 Download Original Summary as PDF",
+                    data=pdf_data,
+                    file_name=f"bid_analysis_original_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True
+                )
+            else:
+                # Fallback to TXT if PDF generation fails
+                original_txt = st.session_state.summary.encode('utf-8')
+                st.download_button(
+                    label="📥 Download Original Summary as TXT (PDF unavailable)",
+                    data=original_txt,
+                    file_name=f"bid_analysis_original_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+                    mime="text/plain",
+                    use_container_width=True
+                )
+        with col2:
+            if "translated_text" in st.session_state and st.session_state.translated_text:
+                # Convert translated text to bytes for TXT download
+                translated_txt = st.session_state.translated_text.encode('utf-8')
+                st.download_button(
+                    label=f"📥 Download Translated ({st.session_state.translated_lang}) as TXT",
+                    data=translated_txt,
+                    file_name=f"bid_analysis_{st.session_state.translated_lang.lower().replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+                    mime="text/plain",
+                    use_container_width=True
+                )
+        
+        st.subheader("🔍 Ask Questions About the Document")
+        col1, col2 = st.columns([4, 1])
+        user_question = col1.text_input("Type your question here:", value=st.session_state.get("user_question", ""), placeholder="e.g., What is the tender submission deadline?", key="question_input")
+        ask_button = col2.button("🔍 Ask", use_container_width=True, type="primary")
+
+        if (ask_button and user_question) or (user_question and user_question != st.session_state.get("last_question", "")):
+            st.session_state.last_question = user_question
+            if user_question.strip():
+                answer = answer_question_from_chunks(user_question, st.session_state.get("text_chunks", []))
+                st.session_state.qa_history.append((user_question, answer))
+                st.markdown(f'<div class="question-card"><h4>Your Question:</h4><p>{user_question}</p></div>', unsafe_allow_html=True)
+                if answer.startswith("Error"):
+                    st.markdown(f'<div class="error-card"><h4>⚠️ Error:</h4><p>{answer}</p></div>', unsafe_allow_html=True)
+                else:
+                    formatted_answer = format_answer_for_display(answer)
+                    st.markdown(f'<div class="answer-card"><h4>💡 Answer:</h4><p>{formatted_answer}</p></div>', unsafe_allow_html=True)
+
+        if st.session_state.qa_history:
+            with st.expander(f"📚 Q&A History ({len(st.session_state.qa_history)} questions)"):
+                for i, (q, a) in enumerate(reversed(st.session_state.qa_history[-10:])):
+                    st.markdown(f"**Q{len(st.session_state.qa_history)-i}:** {q}")
+                    if a.startswith("Error"): st.error(f"**A:** {a}")
+                    else: st.markdown(f"**A:** {a}")
+                    st.markdown("---")
+
+    st.markdown("---")
+    st.markdown("""<div style="text-align: center; padding: 2rem; color: #666;"><p>🚀 Bid Analyser Pro v2.0</p></div>""", unsafe_allow_html=True)
+
+if __name__ == "__main__":
+    main()
