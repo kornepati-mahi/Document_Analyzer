@@ -3,3 +3,4 @@ requests
 PyPDF2
 python-dotenv
 reportlab>=3.6
+
