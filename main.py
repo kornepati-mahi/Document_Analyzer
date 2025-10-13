@@ -350,13 +350,21 @@ def create_pdf_bytes(text, title="Bid Analysis Summary"):
                     return font_key
                 fonts_dir_local = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".fonts")
                 os.makedirs(fonts_dir_local, exist_ok=True)
-                target_path = os.path.join(fonts_dir_local, f"{font_key}.ttf")
-                if not os.path.exists(target_path):
+                # accept either .ttf or .otf
+                ttf_path = os.path.join(fonts_dir_local, f"{font_key}.ttf")
+                otf_path = os.path.join(fonts_dir_local, f"{font_key}.otf")
+                target_path = ttf_path if os.path.exists(ttf_path) else (otf_path if os.path.exists(otf_path) else None)
+                if target_path is None:
                     import requests as _requests
                     for u in urls:
                         try:
                             r = _requests.get(u, timeout=20)
                             if r.status_code == 200 and r.content:
+                                # choose extension from url
+                                if u.lower().endswith('.otf'):
+                                    target_path = otf_path
+                                else:
+                                    target_path = ttf_path
                                 with open(target_path, "wb") as f:
                                     f.write(r.content)
                                 break
@@ -364,6 +372,11 @@ def create_pdf_bytes(text, title="Bid Analysis Summary"):
                             continue
                 if os.path.exists(target_path):
                     pdfmetrics.registerFont(TTFont(font_key, target_path))
+                    # Ensure ReportLab can resolve family mapping (normal/bold/italic)
+                    try:
+                        pdfmetrics.registerFontFamily(font_key, normal=font_key, bold=font_key, italic=font_key, boldItalic=font_key)
+                    except Exception:
+                        pass
                     registered_fonts.append(font_key)
                     return font_key
             except Exception:
@@ -432,6 +445,7 @@ def create_pdf_bytes(text, title="Bid Analysis Summary"):
             has_thai = re.search(r'[\u0E00-\u0E7F]', sample_text)
             has_greek = re.search(r'[\u0370-\u03FF]', sample_text)
             has_cyrillic = re.search(r'[\u0400-\u04FF]', sample_text)
+            has_hebrew = re.search(r'[\u0590-\u05FF]', sample_text)
             has_devanagari = re.search(r'[\u0900-\u097F]', sample_text)
             has_bengali = re.search(r'[\u0980-\u09FF]', sample_text)
             has_gurmukhi = re.search(r'[\u0A00-\u0A7F]', sample_text)
@@ -449,28 +463,77 @@ def create_pdf_bytes(text, title="Bid Analysis Summary"):
                         return candidate
             # Japanese
             if has_hiragana_katakana:
-                for candidate in ["Meiryo", "MSJhengHei", "SimSun", "NotoSansFallback", primary_font]:
-                    if candidate in registered_fonts or candidate == "NotoSansFallback":
+                for candidate in ["NotoSansJP", "Meiryo", "MSJhengHei", "SimSun", "NotoSansFallback", primary_font]:
+                    # Already registered system font
+                    if candidate in registered_fonts:
+                        return candidate
+                    # Try to ensure downloadable Noto font
+                    if candidate == "NotoSansJP":
+                        ensured = ensure_font_registered("NotoSansJP", [
+                            "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/Japanese/NotoSansJP-Regular.otf"
+                        ])
+                        if ensured:
+                            return ensured
+                        else:
+                            continue
+                    # Fallback generic
+                    if candidate == "NotoSansFallback":
                         return candidate
             # Chinese (Han)
             if has_cjk:
-                for candidate in ["MicrosoftYaHei", "SimHei", "SimSun", "MSJhengHei", "Meiryo", "NotoSansFallback", primary_font]:
-                    if candidate in registered_fonts or candidate == "NotoSansFallback":
+                for candidate in ["MicrosoftYaHei", "SimHei", "SimSun", "MSJhengHei", "Meiryo", "NotoSansSC", "NotoSansFallback", primary_font]:
+                    if candidate in registered_fonts or candidate in ["NotoSansSC", "NotoSansFallback"]:
+                        if candidate == "NotoSansSC" and candidate not in registered_fonts:
+                            ensured = ensure_font_registered("NotoSansSC", [
+                                "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/SimplifiedChinese/NotoSansSC-Regular.otf"
+                            ])
+                            if ensured:
+                                return ensured
                         return candidate
             # Thai
             if has_thai:
-                for candidate in ["LeelawadeeUI", "AngsanaUPC", "Tahoma", "NotoSansFallback", primary_font]:
-                    if candidate in registered_fonts or candidate == "NotoSansFallback":
+                for candidate in ["LeelawadeeUI", "AngsanaUPC", "Tahoma", "NotoSansThai", "NotoSansFallback", primary_font]:
+                    if candidate in registered_fonts or candidate in ["NotoSansThai", "NotoSansFallback"]:
+                        if candidate == "NotoSansThai" and candidate not in registered_fonts:
+                            ensured = ensure_font_registered("NotoSansThai", [
+                                "https://github.com/googlefonts/noto-fonts/raw/main/unhinted/ttf/NotoSansThai/NotoSansThai-Regular.ttf"
+                            ])
+                            if ensured:
+                                return ensured
                         return candidate
             # Greek
             if has_greek:
-                for candidate in ["Segoe", "ArialUnicode", "Arial", "NotoSansFallback", primary_font]:
-                    if candidate in registered_fonts or candidate == "NotoSansFallback":
+                for candidate in ["Segoe", "ArialUnicode", "Arial", "NotoSansGreek", "NotoSansFallback", primary_font]:
+                    if candidate in registered_fonts or candidate in ["NotoSansGreek", "NotoSansFallback"]:
+                        if candidate == "NotoSansGreek" and candidate not in registered_fonts:
+                            ensured = ensure_font_registered("NotoSansGreek", [
+                                "https://github.com/googlefonts/noto-fonts/raw/main/unhinted/ttf/NotoSansGreek/NotoSansGreek-Regular.ttf"
+                            ])
+                            if ensured:
+                                return ensured
                         return candidate
             # Cyrillic (Russian, Ukrainian, etc.)
             if has_cyrillic:
-                for candidate in ["Segoe", "ArialUnicode", "Arial", "NotoSansFallback", primary_font]:
-                    if candidate in registered_fonts or candidate == "NotoSansFallback":
+                for candidate in ["Segoe", "ArialUnicode", "Arial", "NotoSansCyrillic", "NotoSansFallback", primary_font]:
+                    if candidate in registered_fonts or candidate in ["NotoSansCyrillic", "NotoSansFallback"]:
+                        if candidate == "NotoSansCyrillic" and candidate not in registered_fonts:
+                            ensured = ensure_font_registered("NotoSansCyrillic", [
+                                "https://github.com/googlefonts/noto-fonts/raw/main/unhinted/ttf/NotoSansCyrillic/NotoSansCyrillic-Regular.ttf"
+                            ])
+                            if ensured:
+                                return ensured
+                        return candidate
+
+            # Hebrew (RTL distinct from Arabic)
+            if has_hebrew:
+                for candidate in ["ArialUnicode", "Arial", "NotoSansHebrew", "NotoSansFallback", primary_font]:
+                    if candidate in registered_fonts or candidate in ["NotoSansHebrew", "NotoSansFallback"]:
+                        if candidate == "NotoSansHebrew" and candidate not in registered_fonts:
+                            ensured = ensure_font_registered("NotoSansHebrew", [
+                                "https://github.com/googlefonts/noto-fonts/raw/main/unhinted/ttf/NotoSansHebrew/NotoSansHebrew-Regular.ttf"
+                            ])
+                            if ensured:
+                                return ensured
                         return candidate
             # Indic scripts (download Noto variants if not available)
             if has_devanagari:
