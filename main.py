@@ -342,6 +342,33 @@ def create_pdf_bytes(text, title="Bid Analysis Summary"):
                     arabic_font = "NotoNastaliqUrdu"
             except Exception:
                 pass
+
+        # Helper to download/register a font (used for Indic and CJK fallbacks on Linux)
+        def ensure_font_registered(font_key, urls):
+            try:
+                if font_key in registered_fonts:
+                    return font_key
+                fonts_dir_local = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".fonts")
+                os.makedirs(fonts_dir_local, exist_ok=True)
+                target_path = os.path.join(fonts_dir_local, f"{font_key}.ttf")
+                if not os.path.exists(target_path):
+                    import requests as _requests
+                    for u in urls:
+                        try:
+                            r = _requests.get(u, timeout=20)
+                            if r.status_code == 200 and r.content:
+                                with open(target_path, "wb") as f:
+                                    f.write(r.content)
+                                break
+                        except Exception:
+                            continue
+                if os.path.exists(target_path):
+                    pdfmetrics.registerFont(TTFont(font_key, target_path))
+                    registered_fonts.append(font_key)
+                    return font_key
+            except Exception:
+                pass
+            return None
         
         # Create styles with the best Unicode font
         styles = getSampleStyleSheet()
@@ -405,6 +432,15 @@ def create_pdf_bytes(text, title="Bid Analysis Summary"):
             has_thai = re.search(r'[\u0E00-\u0E7F]', sample_text)
             has_greek = re.search(r'[\u0370-\u03FF]', sample_text)
             has_cyrillic = re.search(r'[\u0400-\u04FF]', sample_text)
+            has_devanagari = re.search(r'[\u0900-\u097F]', sample_text)
+            has_bengali = re.search(r'[\u0980-\u09FF]', sample_text)
+            has_gurmukhi = re.search(r'[\u0A00-\u0A7F]', sample_text)
+            has_gujarati = re.search(r'[\u0A80-\u0AFF]', sample_text)
+            has_odia = re.search(r'[\u0B00-\u0B7F]', sample_text)
+            has_tamil = re.search(r'[\u0B80-\u0BFF]', sample_text)
+            has_telugu = re.search(r'[\u0C00-\u0C7F]', sample_text)
+            has_kannada = re.search(r'[\u0C80-\u0CFF]', sample_text)
+            has_malayalam = re.search(r'[\u0D00-\u0D7F]', sample_text)
 
             # Korean
             if has_hangul:
@@ -436,6 +472,91 @@ def create_pdf_bytes(text, title="Bid Analysis Summary"):
                 for candidate in ["Segoe", "ArialUnicode", "Arial", "NotoSansFallback", primary_font]:
                     if candidate in registered_fonts or candidate == "NotoSansFallback":
                         return candidate
+            # Indic scripts (download Noto variants if not available)
+            if has_devanagari:
+                for candidate in ["Nirmala", "Mangal", "NotoSansDevanagari"]:
+                    if candidate in registered_fonts:
+                        return candidate
+                ensured = ensure_font_registered("NotoSansDevanagari", [
+                    "https://github.com/googlefonts/noto-fonts/raw/main/unhinted/ttf/NotoSansDevanagari/NotoSansDevanagari-Regular.ttf"
+                ])
+                if ensured:
+                    return ensured
+            if has_bengali:
+                for candidate in ["Nirmala", "Vrinda", "NotoSansBengali"]:
+                    if candidate in registered_fonts:
+                        return candidate
+                ensured = ensure_font_registered("NotoSansBengali", [
+                    "https://github.com/googlefonts/noto-fonts/raw/main/unhinted/ttf/NotoSansBengali/NotoSansBengali-Regular.ttf"
+                ])
+                if ensured:
+                    return ensured
+            if has_gurmukhi:
+                for candidate in ["Raavi", "NotoSansGurmukhi"]:
+                    if candidate in registered_fonts:
+                        return candidate
+                ensured = ensure_font_registered("NotoSansGurmukhi", [
+                    "https://github.com/googlefonts/noto-fonts/raw/main/unhinted/ttf/NotoSansGurmukhi/NotoSansGurmukhi-Regular.ttf"
+                ])
+                if ensured:
+                    return ensured
+            if has_gujarati:
+                for candidate in ["Shruti", "NotoSansGujarati"]:
+                    if candidate in registered_fonts:
+                        return candidate
+                ensured = ensure_font_registered("NotoSansGujarati", [
+                    "https://github.com/googlefonts/noto-fonts/raw/main/unhinted/ttf/NotoSansGujarati/NotoSansGujarati-Regular.ttf"
+                ])
+                if ensured:
+                    return ensured
+            if has_odia:
+                for candidate in ["Kalinga", "Kartika", "NotoSansOriya", "NotoSansOdia"]:
+                    if candidate in registered_fonts:
+                        return candidate
+                ensured = ensure_font_registered("NotoSansOriya", [
+                    "https://github.com/googlefonts/noto-fonts/raw/main/unhinted/ttf/NotoSansOriya/NotoSansOriya-Regular.ttf",
+                    "https://github.com/googlefonts/noto-fonts/raw/main/unhinted/ttf/NotoSansOdia/NotoSansOdia-Regular.ttf"
+                ]) or ensure_font_registered("NotoSansOdia", [
+                    "https://github.com/googlefonts/noto-fonts/raw/main/unhinted/ttf/NotoSansOdia/NotoSansOdia-Regular.ttf"
+                ])
+                if ensured:
+                    return ensured
+            if has_tamil:
+                for candidate in ["Latha", "NotoSansTamil"]:
+                    if candidate in registered_fonts:
+                        return candidate
+                ensured = ensure_font_registered("NotoSansTamil", [
+                    "https://github.com/googlefonts/noto-fonts/raw/main/unhinted/ttf/NotoSansTamil/NotoSansTamil-Regular.ttf"
+                ])
+                if ensured:
+                    return ensured
+            if has_telugu:
+                for candidate in ["Gautami", "NotoSansTelugu"]:
+                    if candidate in registered_fonts:
+                        return candidate
+                ensured = ensure_font_registered("NotoSansTelugu", [
+                    "https://github.com/googlefonts/noto-fonts/raw/main/unhinted/ttf/NotoSansTelugu/NotoSansTelugu-Regular.ttf"
+                ])
+                if ensured:
+                    return ensured
+            if has_kannada:
+                for candidate in ["Tunga", "NotoSansKannada"]:
+                    if candidate in registered_fonts:
+                        return candidate
+                ensured = ensure_font_registered("NotoSansKannada", [
+                    "https://github.com/googlefonts/noto-fonts/raw/main/unhinted/ttf/NotoSansKannada/NotoSansKannada-Regular.ttf"
+                ])
+                if ensured:
+                    return ensured
+            if has_malayalam:
+                for candidate in ["Kartika", "NotoSansMalayalam"]:
+                    if candidate in registered_fonts:
+                        return candidate
+                ensured = ensure_font_registered("NotoSansMalayalam", [
+                    "https://github.com/googlefonts/noto-fonts/raw/main/unhinted/ttf/NotoSansMalayalam/NotoSansMalayalam-Regular.ttf"
+                ])
+                if ensured:
+                    return ensured
             return primary_font
 
         # Process each paragraph with Unicode-aware handling
