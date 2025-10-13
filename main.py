@@ -202,6 +202,13 @@ def create_pdf_bytes(text, title="Bid Analysis Summary"):
         from reportlab.pdfbase.ttfonts import TTFont
         import os
         import platform
+        # Optional imports for Arabic/Urdu shaping
+        try:
+            import arabic_reshaper as _arabic_reshaper
+            from bidi.algorithm import get_display as _bidi_get_display
+        except Exception:
+            _arabic_reshaper = None
+            _bidi_get_display = None
 
         buffer = BytesIO()
         doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=36, rightMargin=36, topMargin=36, bottomMargin=36)
@@ -216,6 +223,8 @@ def create_pdf_bytes(text, title="Bid Analysis Summary"):
                 # Primary Unicode fonts
                 ("NotoSans", "C:/Windows/Fonts/NotoSans-Regular.ttf"),
                 ("ArialUnicode", "C:/Windows/Fonts/ARIALUNI.TTF"),
+                ("Nirmala", "C:/Windows/Fonts/Nirmala.ttf"),
+                ("NirmalaUI", "C:/Windows/Fonts/NirmalaUI.ttf"),
                 ("Arial", "C:/Windows/Fonts/arial.ttf"),
                 ("Calibri", "C:/Windows/Fonts/calibri.ttf"),
                 ("Tahoma", "C:/Windows/Fonts/tahoma.ttf"),
@@ -224,8 +233,13 @@ def create_pdf_bytes(text, title="Bid Analysis Summary"):
                 # CJK and Asian language fonts
                 ("MingLiU", "C:/Windows/Fonts/mingliu.ttc"),
                 ("SimSun", "C:/Windows/Fonts/simsun.ttc"),
+                ("SimHei", "C:/Windows/Fonts/simhei.ttf"),
+                ("MicrosoftYaHei", "C:/Windows/Fonts/msyh.ttc"),
                 ("Malgun", "C:/Windows/Fonts/malgun.ttf"),
                 ("Meiryo", "C:/Windows/Fonts/meiryo.ttc"),
+                ("MSJhengHei", "C:/Windows/Fonts/msjh.ttc"),
+                ("Gulim", "C:/Windows/Fonts/gulim.ttc"),
+                ("Batang", "C:/Windows/Fonts/batang.ttc"),
                 # Indian language fonts
                 ("Mangal", "C:/Windows/Fonts/mangal.ttf"),
                 ("Latha", "C:/Windows/Fonts/latha.ttf"),
@@ -233,6 +247,12 @@ def create_pdf_bytes(text, title="Bid Analysis Summary"):
                 ("Tunga", "C:/Windows/Fonts/tunga.ttf"),
                 ("Raavi", "C:/Windows/Fonts/raavi.ttf"),
                 ("Kartika", "C:/Windows/Fonts/kartika.ttf"),
+                # Arabic/Urdu capable system fonts
+                ("TraditionalArabic", "C:/Windows/Fonts/trado.ttf"),
+                ("Arial", "C:/Windows/Fonts/arial.ttf"),
+                # Thai
+                ("LeelawadeeUI", "C:/Windows/Fonts/LeelawUI.ttf"),
+                ("AngsanaUPC", "C:/Windows/Fonts/angsau.ttf"),
             ],
             "Darwin": [
                 ("Arial", "/System/Library/Fonts/Arial.ttf"),
@@ -265,12 +285,63 @@ def create_pdf_bytes(text, title="Bid Analysis Summary"):
                 except Exception as e:
                     continue
         
-        # Select the best available font (prioritize Noto Sans and Arial Unicode for coverage)
-        primary_font = "Helvetica"  # Fallback
-        for preferred in ["NotoSans", "ArialUnicode", "Arial", "DejaVuSans", "Liberation"]:
+        # Select the best available font (prioritize broad Unicode coverage) and auto-download fallback
+        primary_font = "Helvetica"  # Fallback until we find better
+        for preferred in [
+            "Nirmala", "NirmalaUI",  # Wide Indic coverage on Windows 10+
+            "ArialUnicode",           # Very broad coverage when present
+            "NotoSans",               # If installed locally
+            "DejaVuSans", "Tahoma",  # Good general unicode support
+            "Liberation", "Arial"
+        ]:
             if preferred in registered_fonts:
                 primary_font = preferred
                 break
+
+        # If none of the good fonts are available, download NotoSans as an embedded fallback
+        if primary_font == "Helvetica":
+            try:
+                import requests as _requests
+                fonts_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".fonts")
+                os.makedirs(fonts_dir, exist_ok=True)
+                noto_path = os.path.join(fonts_dir, "NotoSans-Regular.ttf")
+                if not os.path.exists(noto_path):
+                    # Stable source for Noto Sans Regular
+                    url = "https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSans/NotoSans-Regular.ttf"
+                    resp = _requests.get(url, timeout=20)
+                    if resp.status_code == 200:
+                        with open(noto_path, "wb") as f:
+                            f.write(resp.content)
+                if os.path.exists(noto_path):
+                    pdfmetrics.registerFont(TTFont("NotoSansFallback", noto_path))
+                    primary_font = "NotoSansFallback"
+            except Exception:
+                # If download fails, continue with Helvetica; text may show missing glyphs
+                pass
+
+        # Ensure an Arabic/Urdu font is available for RTL if needed
+        arabic_font = None
+        for preferred in ["TraditionalArabic", "ArialUnicode", "Tahoma", "NotoSansFallback", "Arial"]:
+            if preferred in registered_fonts or preferred == "NotoSansFallback":
+                arabic_font = preferred
+                break
+        if arabic_font is None:
+            try:
+                import requests as _requests
+                fonts_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".fonts")
+                os.makedirs(fonts_dir, exist_ok=True)
+                noto_urdu_path = os.path.join(fonts_dir, "NotoNastaliqUrdu-Regular.ttf")
+                if not os.path.exists(noto_urdu_path):
+                    url = "https://github.com/googlefonts/noto-fonts/raw/main/unhinted/ttf/NotoNastaliqUrdu/NotoNastaliqUrdu-Regular.ttf"
+                    resp = _requests.get(url, timeout=20)
+                    if resp.status_code == 200:
+                        with open(noto_urdu_path, "wb") as f:
+                            f.write(resp.content)
+                if os.path.exists(noto_urdu_path):
+                    pdfmetrics.registerFont(TTFont("NotoNastaliqUrdu", noto_urdu_path))
+                    arabic_font = "NotoNastaliqUrdu"
+            except Exception:
+                pass
         
         # Create styles with the best Unicode font
         styles = getSampleStyleSheet()
@@ -302,6 +373,8 @@ def create_pdf_bytes(text, title="Bid Analysis Summary"):
             alignment=2,  # Right alignment for RTL
             wordWrap='RTL'
         )
+        if arabic_font:
+            rtl_style.fontName = arabic_font
 
         story = []
         story.append(Paragraph(title, heading_style))
@@ -320,23 +393,84 @@ def create_pdf_bytes(text, title="Bid Analysis Summary"):
         if not paragraphs:
             paragraphs = [text]
 
+        # Cache styles by font to avoid re-creating styles for every paragraph
+        style_for_font = {primary_font: normal_style}
+
+        # Helper to choose a font given text content
+        def select_font_for_text(sample_text):
+            # Ranges for scripts
+            has_hangul = re.search(r'[\u1100-\u11FF\u3130-\u318F\uAC00-\uD7AF]', sample_text)
+            has_hiragana_katakana = re.search(r'[\u3040-\u309F\u30A0-\u30FF]', sample_text)
+            has_cjk = re.search(r'[\u4E00-\u9FFF]', sample_text)
+            has_thai = re.search(r'[\u0E00-\u0E7F]', sample_text)
+            has_greek = re.search(r'[\u0370-\u03FF]', sample_text)
+            has_cyrillic = re.search(r'[\u0400-\u04FF]', sample_text)
+
+            # Korean
+            if has_hangul:
+                for candidate in ["Malgun", "Gulim", "Batang", "Meiryo", "NotoSansFallback", primary_font]:
+                    if candidate in registered_fonts or candidate == "NotoSansFallback":
+                        return candidate
+            # Japanese
+            if has_hiragana_katakana:
+                for candidate in ["Meiryo", "MSJhengHei", "SimSun", "NotoSansFallback", primary_font]:
+                    if candidate in registered_fonts or candidate == "NotoSansFallback":
+                        return candidate
+            # Chinese (Han)
+            if has_cjk:
+                for candidate in ["MicrosoftYaHei", "SimHei", "SimSun", "MSJhengHei", "Meiryo", "NotoSansFallback", primary_font]:
+                    if candidate in registered_fonts or candidate == "NotoSansFallback":
+                        return candidate
+            # Thai
+            if has_thai:
+                for candidate in ["LeelawadeeUI", "AngsanaUPC", "Tahoma", "NotoSansFallback", primary_font]:
+                    if candidate in registered_fonts or candidate == "NotoSansFallback":
+                        return candidate
+            # Greek
+            if has_greek:
+                for candidate in ["Segoe", "ArialUnicode", "Arial", "NotoSansFallback", primary_font]:
+                    if candidate in registered_fonts or candidate == "NotoSansFallback":
+                        return candidate
+            # Cyrillic (Russian, Ukrainian, etc.)
+            if has_cyrillic:
+                for candidate in ["Segoe", "ArialUnicode", "Arial", "NotoSansFallback", primary_font]:
+                    if candidate in registered_fonts or candidate == "NotoSansFallback":
+                        return candidate
+            return primary_font
+
         # Process each paragraph with Unicode-aware handling
         for para in paragraphs:
             if not para.strip():
                 continue
                 
-            # Minimal HTML escaping while preserving Unicode
-            safe_para = para.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-            safe_para = safe_para.replace('\n', '<br/>')
-            
-            # Detect RTL languages (Arabic, Hebrew, Urdu, etc.)
-            rtl_chars = re.findall(r'[\u0590-\u05FF\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]', safe_para)
-            
-            # Use RTL style if RTL characters are detected
-            if rtl_chars and len(rtl_chars) > len(safe_para) * 0.3:  # >30% RTL characters
+            # Detect RTL languages (Arabic, Hebrew, Urdu, etc.) first on raw paragraph
+            rtl_chars = re.findall(r'[\u0590-\u05FF\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]', para)
+
+            if rtl_chars and len(rtl_chars) > max(1, int(len(para) * 0.2)):
+                # Apply shaping + bidi reordering for Arabic-script languages
+                shaped = para
+                try:
+                    if _arabic_reshaper and _bidi_get_display:
+                        shaped = _bidi_get_display(_arabic_reshaper.reshape(para))
+                except Exception:
+                    pass
+                # Minimal HTML escaping after shaping
+                safe_para = shaped.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('\n', '<br/>')
                 story.append(Paragraph(safe_para, rtl_style))
             else:
-                story.append(Paragraph(safe_para, normal_style))
+                # Minimal HTML escaping while preserving Unicode
+                safe_para = para.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('\n', '<br/>')
+                # Choose font per script and use cached style
+                font_for_para = select_font_for_text(para)
+                para_style = style_for_font.get(font_for_para)
+                if para_style is None:
+                    para_style = ParagraphStyle(
+                        f'Unicode-{font_for_para}',
+                        parent=normal_style,
+                        fontName=font_for_para
+                    )
+                    style_for_font[font_for_para] = para_style
+                story.append(Paragraph(safe_para, para_style))
             
             story.append(Spacer(1, 0.15 * inch))
 
@@ -657,7 +791,20 @@ def main():
                 st.error("PDF generation is unavailable. Ensure 'reportlab' is installed on the server.")
         with col2:
             if "translated_text" in st.session_state and st.session_state.translated_text:
-                # Convert translated text to bytes for TXT download
+                # PDF for translated summary
+                translated_pdf = create_pdf_bytes(
+                    st.session_state.translated_text,
+                    f"Bid Analysis Summary ({st.session_state.translated_lang})"
+                )
+                if translated_pdf:
+                    st.download_button(
+                        label=f"📥 Download Translated ({st.session_state.translated_lang}) as PDF",
+                        data=translated_pdf,
+                        file_name=f"bid_analysis_{st.session_state.translated_lang.lower().replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                        mime="application/pdf",
+                        use_container_width=True
+                    )
+                # TXT for translated summary
                 translated_txt = st.session_state.translated_text.encode('utf-8')
                 st.download_button(
                     label=f"📥 Download Translated ({st.session_state.translated_lang}) as TXT",
@@ -697,3 +844,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
