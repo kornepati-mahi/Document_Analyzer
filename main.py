@@ -546,7 +546,7 @@ def create_pdf_bytes(text, title="Bid Analysis Summary"):
                 if ensured:
                     return ensured
             if has_bengali:
-                for candidate in ["Nirmala", "Vrinda", "NotoSansBengali"]:
+                for candidate in ["Nirmala", "NirmalaUI", "Vrinda", "NotoSansBengali"]:
                     if candidate in registered_fonts:
                         return candidate
                 ensured = ensure_font_registered("NotoSansBengali", [
@@ -555,7 +555,7 @@ def create_pdf_bytes(text, title="Bid Analysis Summary"):
                 if ensured:
                     return ensured
             if has_gurmukhi:
-                for candidate in ["Raavi", "NotoSansGurmukhi"]:
+                for candidate in ["Nirmala", "NirmalaUI", "Raavi", "NotoSansGurmukhi"]:
                     if candidate in registered_fonts:
                         return candidate
                 ensured = ensure_font_registered("NotoSansGurmukhi", [
@@ -564,7 +564,7 @@ def create_pdf_bytes(text, title="Bid Analysis Summary"):
                 if ensured:
                     return ensured
             if has_gujarati:
-                for candidate in ["Shruti", "NotoSansGujarati"]:
+                for candidate in ["Nirmala", "NirmalaUI", "Shruti", "NotoSansGujarati"]:
                     if candidate in registered_fonts:
                         return candidate
                 ensured = ensure_font_registered("NotoSansGujarati", [
@@ -573,7 +573,7 @@ def create_pdf_bytes(text, title="Bid Analysis Summary"):
                 if ensured:
                     return ensured
             if has_odia:
-                for candidate in ["Kalinga", "Kartika", "NotoSansOriya", "NotoSansOdia"]:
+                for candidate in ["Nirmala", "NirmalaUI", "Kalinga", "Kartika", "NotoSansOriya", "NotoSansOdia"]:
                     if candidate in registered_fonts:
                         return candidate
                 ensured = ensure_font_registered("NotoSansOriya", [
@@ -585,7 +585,7 @@ def create_pdf_bytes(text, title="Bid Analysis Summary"):
                 if ensured:
                     return ensured
             if has_tamil:
-                for candidate in ["Latha", "NotoSansTamil"]:
+                for candidate in ["Nirmala", "NirmalaUI", "Latha", "NotoSansTamil"]:
                     if candidate in registered_fonts:
                         return candidate
                 ensured = ensure_font_registered("NotoSansTamil", [
@@ -594,7 +594,7 @@ def create_pdf_bytes(text, title="Bid Analysis Summary"):
                 if ensured:
                     return ensured
             if has_telugu:
-                for candidate in ["Gautami", "NotoSansTelugu"]:
+                for candidate in ["Nirmala", "NirmalaUI", "Gautami", "NotoSansTelugu"]:
                     if candidate in registered_fonts:
                         return candidate
                 ensured = ensure_font_registered("NotoSansTelugu", [
@@ -603,7 +603,7 @@ def create_pdf_bytes(text, title="Bid Analysis Summary"):
                 if ensured:
                     return ensured
             if has_kannada:
-                for candidate in ["Tunga", "NotoSansKannada"]:
+                for candidate in ["Nirmala", "NirmalaUI", "Tunga", "NotoSansKannada"]:
                     if candidate in registered_fonts:
                         return candidate
                 ensured = ensure_font_registered("NotoSansKannada", [
@@ -612,7 +612,7 @@ def create_pdf_bytes(text, title="Bid Analysis Summary"):
                 if ensured:
                     return ensured
             if has_malayalam:
-                for candidate in ["Kartika", "NotoSansMalayalam"]:
+                for candidate in ["Nirmala", "NirmalaUI", "Kartika", "NotoSansMalayalam"]:
                     if candidate in registered_fonts:
                         return candidate
                 ensured = ensure_font_registered("NotoSansMalayalam", [
@@ -621,6 +621,66 @@ def create_pdf_bytes(text, title="Bid Analysis Summary"):
                 if ensured:
                     return ensured
             return primary_font
+
+        # Helper: escape minimal HTML entities for Paragraph input
+        def html_escape(value: str) -> str:
+            return value.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+
+        # Helper: split non-RTL text into font-specific spans so mixed scripts render in one paragraph
+        script_patterns = [
+            ("hangul", r"[\u1100-\u11FF\u3130-\u318F\uAC00-\uD7AF]"),
+            ("hiragana_katakana", r"[\u3040-\u309F\u30A0-\u30FF]"),
+            ("cjk", r"[\u4E00-\u9FFF]"),
+            ("thai", r"[\u0E00-\u0E7F]"),
+            ("greek", r"[\u0370-\u03FF]"),
+            ("cyrillic", r"[\u0400-\u04FF]"),
+            ("hebrew", r"[\u0590-\u05FF]"),
+            ("arabic", r"[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]"),
+            ("devanagari", r"[\u0900-\u097F]"),
+            ("bengali", r"[\u0980-\u09FF]"),
+            ("gurmukhi", r"[\u0A00-\u0A7F]"),
+            ("gujarati", r"[\u0A80-\u0AFF]"),
+            ("odia", r"[\u0B00-\u0B7F]"),
+            ("tamil", r"[\u0B80-\u0BFF]"),
+            ("telugu", r"[\u0C00-\u0C7F]"),
+            ("kannada", r"[\u0C80-\u0CFF]"),
+            ("malayalam", r"[\u0D00-\u0D7F]")
+        ]
+
+        combined_re = re.compile("|".join(f"(?P<{name}>{pat})" for name, pat in script_patterns))
+
+        def segment_with_fonts(non_rtl_text: str) -> str:
+            # Walk text and wrap each script run with an explicit font so ReportLab renders all glyphs
+            result_parts = []
+            current_chunk = []
+            current_font = None
+
+            def flush():
+                if current_chunk:
+                    text_chunk = html_escape("".join(current_chunk)).replace('\n', '<br/>')
+                    if current_font:
+                        # ReportLab expects the 'face' attribute on <font>
+                        result_parts.append(f"<font face=\"{current_font}\">{text_chunk}</font>")
+                    else:
+                        result_parts.append(text_chunk)
+                    current_chunk.clear()
+
+            for ch in non_rtl_text:
+                match = combined_re.match(ch)
+                if match:
+                    # Choose font based on detected script for this char
+                    font_for_char = select_font_for_text(ch)
+                    if font_for_char != current_font:
+                        flush()
+                        current_font = font_for_char
+                else:
+                    # Default to primary font for Latin/punctuation
+                    if current_font != primary_font:
+                        flush()
+                        current_font = primary_font
+                current_chunk.append(ch)
+            flush()
+            return "".join(result_parts)
 
         # Process each paragraph with Unicode-aware handling
         for para in paragraphs:
@@ -639,22 +699,20 @@ def create_pdf_bytes(text, title="Bid Analysis Summary"):
                 except Exception:
                     pass
                 # Minimal HTML escaping after shaping
-                safe_para = shaped.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('\n', '<br/>')
+                safe_para = html_escape(shaped).replace('\n', '<br/>')
                 story.append(Paragraph(safe_para, rtl_style))
             else:
-                # Minimal HTML escaping while preserving Unicode
-                safe_para = para.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('\n', '<br/>')
-                # Choose font per script and use cached style
-                font_for_para = select_font_for_text(para)
-                para_style = style_for_font.get(font_for_para)
+                # Build a mixed-font paragraph so multi-language strings render correctly
+                mixed = segment_with_fonts(para)
+                para_style = style_for_font.get(primary_font)
                 if para_style is None:
                     para_style = ParagraphStyle(
-                        f'Unicode-{font_for_para}',
+                        f'Unicode-{primary_font}',
                         parent=normal_style,
-                        fontName=font_for_para
+                        fontName=primary_font
                     )
-                    style_for_font[font_for_para] = para_style
-                story.append(Paragraph(safe_para, para_style))
+                    style_for_font[primary_font] = para_style
+                story.append(Paragraph(mixed, para_style))
             
             story.append(Spacer(1, 0.15 * inch))
 
@@ -719,29 +777,79 @@ def ask_llm(question, context, max_retries=3):
 def translate_text_with_llm(text_to_translate, target_language):
     if not GROQ_API_KEY:
         return "Error: GROQ_API_KEY not found. Cannot translate."
-    prompt = f"""Translate the following English text to {target_language}. Provide ONLY the translated text, without any introductory phrases, explanations, or quotation marks. Text to translate:\n---\n{text_to_translate}\n---"""
-    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-    messages = [
-        {"role": "system", "content": f"You are an expert translator. Your task is to translate English text into {target_language} accurately."},
-        {"role": "user", "content": prompt}
-    ]
-    data = {"model": "llama-3.1-8b-instant", "messages": messages, "temperature": 0.1, "max_tokens": 2000}
-    try:
-        response = requests.post(GROQ_API_URL, headers=headers, json=data, timeout=45)
-        if response.status_code >= 400:
+
+    def _call_api(chunk_text, attempt_limit=6):
+        headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+        prompt = f"""Translate the following English text to {target_language}. Provide ONLY the translated text, without any introductory phrases, explanations, or quotation marks. Text to translate:\n---\n{chunk_text}\n---"""
+        messages = [
+            {"role": "system", "content": f"You are an expert translator. Your task is to translate English text into {target_language} accurately."},
+            {"role": "user", "content": prompt}
+        ]
+        data = {"model": "llama-3.1-8b-instant", "messages": messages, "temperature": 0.0, "max_tokens": 1800}
+        last_err = None
+        for attempt in range(attempt_limit):
             try:
-                err_json = response.json()
-                return f"Error during translation API call: {response.status_code} - {err_json.get('error', {}).get('message') or err_json}"
-            except Exception:
-                return f"Error during translation API call: {response.status_code} - {response.text}"
-        response.raise_for_status()
-        response_data = response.json()
-        if 'choices' in response_data and len(response_data['choices']) > 0:
-            return response_data["choices"][0]["message"]["content"]
+                resp = requests.post(GROQ_API_URL, headers=headers, json=data, timeout=60)
+                if resp.status_code == 429:
+                    retry_after = resp.headers.get("Retry-After")
+                    try:
+                        wait_s = float(retry_after) if retry_after else min(1.5 * (2 ** attempt), 15)
+                    except Exception:
+                        wait_s = min(1.5 * (2 ** attempt), 15)
+                    time.sleep(wait_s)
+                    continue
+                if resp.status_code >= 400:
+                    try:
+                        j = resp.json()
+                        last_err = f"{resp.status_code} - {j.get('error', {}).get('message') or j}"
+                    except Exception:
+                        last_err = f"{resp.status_code} - {resp.text}"
+                    time.sleep(min(1.5 * (2 ** attempt), 10))
+                    continue
+                resp.raise_for_status()
+                j = resp.json()
+                if 'choices' in j and len(j['choices']) > 0:
+                    return j['choices'][0]['message']['content']
+                last_err = "Invalid response format"
+            except Exception as e:
+                last_err = str(e)
+                time.sleep(min(1.5 * (2 ** attempt), 10))
+                continue
+        return f"Error during translation API call: {last_err}"
+
+    if not text_to_translate:
+        return ""
+    # Chunk long text to reduce tokens-per-minute usage
+    max_chunk_chars = 1400
+    if len(text_to_translate) <= max_chunk_chars:
+        return _call_api(text_to_translate)
+
+    # Split on paragraph boundaries and group to stay within limit
+    parts = []
+    current = []
+    current_len = 0
+    for para in [p.strip() for p in text_to_translate.replace('\r', '').split('\n\n')]:
+        if not para:
+            continue
+        add_len = len(para) + 2
+        if current_len + add_len > max_chunk_chars and current:
+            parts.append('\n\n'.join(current))
+            current = [para]
+            current_len = len(para)
         else:
-            return "Error: Could not get a valid translation from the API."
-    except Exception as e:
-        return f"Error during translation API call: {str(e)}"
+            current.append(para)
+            current_len += add_len
+    if current:
+        parts.append('\n\n'.join(current))
+
+    translated_chunks = []
+    for chunk in parts:
+        translated = _call_api(chunk)
+        if translated.startswith("Error"):
+            return translated
+        translated_chunks.append(translated.strip())
+        time.sleep(0.4)
+    return '\n\n'.join(translated_chunks)
 
 def generate_comprehensive_summary(text_chunks):
     if not text_chunks:
