@@ -965,7 +965,6 @@ def main():
                 "French": "French",
                 "German": "German",
                 "Mandarin Chinese": "Mandarin Chinese",
-                "Japanese": "Japanese",
                 "Russian": "Russian",
                 "Arabic": "Arabic",
                 "Portuguese": "Portuguese",
@@ -1136,5 +1135,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
