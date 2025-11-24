@@ -7,6 +7,7 @@ import re
 import time
 from datetime import datetime
 import json
+from typing import Dict, Optional
 import streamlit.components.v1 as components
 from io import BytesIO
 
@@ -185,6 +186,161 @@ def clean_text(text):
     # Normalize whitespace
     text = re.sub(r'\s+', ' ', text)
     return text.strip()
+
+MONTH_PATTERN = r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"
+DATE_CORE_PATTERN = rf"(?:\d{{1,2}}(?:st|nd|rd|th)?[-/\.]\d{{1,2}}[-/\.]\d{{2,4}}|\d{{4}}[-/\.]\d{{1,2}}[-/\.]\d{{1,2}}|\d{{1,2}}\s+{MONTH_PATTERN}\s+\d{{2,4}}|{MONTH_PATTERN}\s+\d{{1,2}},?\s+\d{{2,4}})"
+TIME_CORE_PATTERN = r"(?:\s*(?:at|by|upto|up to|till|till)?\s*\d{1,2}[:\.]\d{2}(?::\d{2})?\s*(?:AM|PM|A\.M\.|P\.M\.|hrs?|hours?|IST|GMT|Hrs|HRS)?)?"
+DATE_TIME_REGEX = re.compile(rf"({DATE_CORE_PATTERN}{TIME_CORE_PATTERN})", re.IGNORECASE)
+
+
+def _keyword_to_regex(keyword: str) -> str:
+    """Turn a keyword phrase into a regex that tolerates flexible whitespace."""
+    escaped = re.escape(keyword.strip())
+    return re.sub(r'\\\s+', r'\\s+', escaped)
+
+
+def normalize_datetime_string(raw_str: str) -> str:
+    """Normalize various date/time strings into DD-MM-YYYY HH:MM:SS when possible."""
+    if not raw_str:
+        return ""
+    cleaned = raw_str.strip()
+    cleaned = re.sub(r'(\d{1,2})\.(\d{2})(\.(\d{2}))?', lambda m: f"{m.group(1)}:{m.group(2)}{':' + m.group(4) if m.group(4) else ''}", cleaned)
+    cleaned = re.sub(r'(\d{1,2})(st|nd|rd|th)', r'\1', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r'\bhrs?\b', '', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r'\bhours?\b', '', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r'\bIST\b', '', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip().replace(' ,', ',')
+
+    known_formats = [
+        "%d-%m-%Y %H:%M:%S",
+        "%d-%m-%Y %H:%M",
+        "%d/%m/%Y %H:%M",
+        "%d/%m/%Y",
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%d",
+        "%d %b %Y %H:%M",
+        "%d %b %Y",
+        "%d %B %Y %H:%M",
+        "%d %B %Y",
+        "%B %d %Y",
+        "%B %d, %Y",
+        "%d-%m-%y",
+        "%d.%m.%Y",
+    ]
+    for fmt in known_formats:
+        try:
+            dt_obj = datetime.strptime(cleaned, fmt)
+            return dt_obj.strftime("%d-%m-%Y %H:%M:%S")
+        except ValueError:
+            continue
+    try:
+        from dateutil import parser as date_parser  # type: ignore
+
+        dt_obj = date_parser.parse(cleaned, dayfirst=True, fuzzy=True)
+        return dt_obj.strftime("%d-%m-%Y %H:%M:%S")
+    except Exception:
+        return cleaned
+
+
+def _find_timeline_value(text: str, keywords: list[str]) -> Optional[str]:
+    if not text:
+        return None
+    for keyword in keywords:
+        regex = re.compile(_keyword_to_regex(keyword) + r".{0,200}", re.IGNORECASE)
+        match = regex.search(text)
+        if not match:
+            continue
+        snippet = match.group(0)
+        date_match = DATE_TIME_REGEX.search(snippet)
+        if date_match:
+            normalized = normalize_datetime_string(date_match.group(1))
+            return normalized
+    return None
+
+
+def _find_duration_value(text: str, keywords: list[str]) -> Optional[str]:
+    if not text:
+        return None
+    duration_regex = re.compile(r"(\d+\s*(?:days?|weeks?|months?|years?)(?:\s*(?:and|&)\s*\d+\s*(?:days?|weeks?|months?|years?))?)", re.IGNORECASE)
+    for keyword in keywords:
+        regex = re.compile(_keyword_to_regex(keyword) + r".{0,160}", re.IGNORECASE)
+        match = regex.search(text)
+        if not match:
+            continue
+        snippet = match.group(0)
+        duration_match = duration_regex.search(snippet)
+        if duration_match:
+            return duration_match.group(1).strip().rstrip('.,;')
+    return None
+
+
+def extract_structured_timeline_details(text: str) -> Dict[str, str]:
+    """Extract critical timeline fields deterministically using regex-based heuristics."""
+    if not text:
+        return {}
+    submission_keywords = [
+        "bid submission deadline",
+        "tender submission deadline",
+        "last date of submission",
+        "submission closing date",
+        "last date and time of bid submission",
+        "online bid submission end date",
+        "closing date for submission",
+        "submission end date",
+        "bid closing on",
+    ]
+    opening_keywords = [
+        "technical bid opening",
+        "opening of technical bid",
+        "technical opening date",
+        "technical bids will be opened",
+        "technical bid open",
+    ]
+    duration_keywords = [
+        "contract duration",
+        "completion period",
+        "project duration",
+        "contract period",
+        "execution period",
+        "delivery period",
+        "tenure of contract",
+    ]
+
+    extracted = {}
+    submission_value = _find_timeline_value(text, submission_keywords)
+    if submission_value:
+        extracted["Bid Submission Deadline"] = submission_value
+    opening_value = _find_timeline_value(text, opening_keywords)
+    if opening_value:
+        extracted["Technical Bid Opening"] = opening_value
+    duration_value = _find_duration_value(text, duration_keywords)
+    if duration_value:
+        extracted["Contract Duration"] = duration_value
+    return extracted
+
+
+def override_summary_with_structured_data(summary_text: str, extracted_fields: Optional[Dict[str, str]]) -> str:
+    """Override LLM summary entries when deterministic extraction finds better values."""
+    if not summary_text or not extracted_fields:
+        return summary_text
+
+    updated_summary = summary_text
+    for label, value in extracted_fields.items():
+        if not value:
+            continue
+        pattern = re.compile(rf"({re.escape(label)}\s*:\s*)(.*)", re.IGNORECASE)
+
+        def replace(match: re.Match) -> str:
+            current_value = match.group(2).strip()
+            if not current_value or current_value.lower().startswith("not "):
+                return f"{match.group(1)}{value}"
+            return match.group(0)
+
+        updated_summary, count = pattern.subn(replace, updated_summary, count=1)
+        if count == 0:
+            # Append value if the summary never mentioned the label
+            updated_summary = f"{updated_summary}\n{label}: {value}"
+    return updated_summary
 
 def create_pdf_bytes(text, title="Bid Analysis Summary"):
     """Create a PDF with comprehensive Unicode support for all languages."""
@@ -920,7 +1076,7 @@ def main():
         
         st.subheader("⚡ Quick Actions")
         if st.button("🔄 Clear Analysis", use_container_width=True):
-            keys_to_clear = ["summary", "cleaned_text", "text_chunks", "user_question", "answer", "last_uploaded_file", "qa_history", "translated_text", "translated_lang"]
+            keys_to_clear = ["summary", "cleaned_text", "text_chunks", "user_question", "answer", "last_uploaded_file", "qa_history", "translated_text", "translated_lang", "timeline_overrides"]
             for key in keys_to_clear:
                 st.session_state.pop(key, None)
             st.rerun()
@@ -1008,7 +1164,7 @@ def main():
     uploaded_filename = uploaded_file.name if uploaded_file else None
     if st.session_state.get("last_uploaded_file") != uploaded_filename:
         st.session_state["last_uploaded_file"] = uploaded_filename
-        keys_to_clear = ["summary", "cleaned_text", "text_chunks", "user_question", "answer", "translated_text", "translated_lang"]
+        keys_to_clear = ["summary", "cleaned_text", "text_chunks", "user_question", "answer", "translated_text", "translated_lang", "timeline_overrides"]
         for key in keys_to_clear:
             st.session_state.pop(key, None)
 
@@ -1037,6 +1193,8 @@ def main():
                 if not cleaned_text or len(cleaned_text.strip()) < 100:
                     st.error("Document appears to be empty or too short for analysis."); st.stop()
                 st.session_state.cleaned_text = cleaned_text
+                timeline_overrides = extract_structured_timeline_details(cleaned_text)
+                st.session_state.timeline_overrides = timeline_overrides
                 
                 text_chunks = split_text_into_chunks(cleaned_text)
                 progress_bar.progress(75)
@@ -1046,6 +1204,7 @@ def main():
                 st.session_state.text_chunks = text_chunks
                 
                 summary = generate_comprehensive_summary(text_chunks)
+                summary = override_summary_with_structured_data(summary, timeline_overrides)
                 st.session_state.summary = summary
                 progress_bar.progress(100)
             except Exception as e:
@@ -1135,6 +1294,5 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 
 
