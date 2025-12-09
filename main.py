@@ -7,23 +7,23 @@ import json
 from datetime import datetime
 from io import BytesIO
 
-# ====================== FIXES FOR CLOUD ======================
+# --------------------- CLOUD FIX ---------------------
 os.environ["STREAMLIT_SERVER_HEADLESS"] = "true"
 
+# --------------------- GROQ API ---------------------
 from dotenv import load_dotenv
 load_dotenv()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 if not GROQ_API_KEY:
-    st.error("Set GROQ_API_KEY in .env or environment variables")
+    st.error("Please set GROQ_API_KEY in .env")
     st.stop()
 
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
-# ====================== BEST PDF READER (GeM, PWD, CPWD) ======================
+# --------------------- BEST PDF READER (GeM, PWD, CPWD) ---------------------
 import pdfplumber
 
 def extract_text_from_pdf(pdf_file):
-    """Perfect extraction from tables + text — works on GeM, scanned PDFs"""
     full_text = ""
     try:
         with pdfplumber.open(pdf_file) as pdf:
@@ -32,13 +32,11 @@ def extract_text_from_pdf(pdf_file):
                 if text:
                     full_text += f"\n--- Page {i+1} ---\n{text}\n"
                 else:
-                    # Extract tables (this saves GeM tenders!)
                     tables = page.extract_tables()
                     for table in tables:
                         for row in table:
                             clean_row = " | ".join([cell.strip() if cell else "" for cell in row])
                             full_text += clean_row + "\n"
-                    # Fallback extraction
                     fallback = page.extract_text(x_tolerance=3, y_tolerance=3, keep_blank_chars=True)
                     if fallback:
                         full_text += f"\n--- Page {i+1} (fallback) ---\n{fallback}\n"
@@ -47,7 +45,7 @@ def extract_text_from_pdf(pdf_file):
         st.error(f"PDF error: {e}")
         return None
 
-# ====================== PAGE & STYLE ======================
+# --------------------- PAGE & STYLE ---------------------
 st.set_page_config(page_title="Bid Analyser Pro", page_icon="Tender", layout="wide")
 st.markdown("""
 <style>
@@ -57,9 +55,9 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<div class="main-header"><h1>Bid Analyser Pro</h1><p>Works on GeM • PWD • Hindi • Scanned PDFs</p></div>', unsafe_allow_html=True)
+st.markdown('<div class="main-header"><h1>Bid Analyser Pro</h1><p>Perfect for GeM • PWD • Hindi • Scanned PDFs</p></div>', unsafe_allow_html=True)
 
-# ====================== HELPERS ======================
+# --------------------- HELPERS ---------------------
 def clean_text(text):
     text = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', text)
     return re.sub(r'\s+', ' ', text).strip()
@@ -78,7 +76,7 @@ def split_chunks(text, size=3000, overlap=300):
 
 def ask_llm(prompt, context="", model="llama3-70b-8192", temp=0.1):
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-    messages = [{"role": "system", "content": "You are an expert in Indian tenders. Follow format exactly."}]
+    messages = [{"role": "system", "content": "You are an expert in Indian government tenders. Follow format exactly."}]
     messages.append({"role": "user", "content": f"{context}\n\nTask: {prompt}" if context else prompt})
     data = {"model": model, "messages": messages, "temperature": temp, "max_tokens": 2048}
     for _ in range(3):
@@ -94,7 +92,7 @@ def ask_llm(prompt, context="", model="llama3-70b-8192", temp=0.1):
     return "Error: API failed"
 
 def generate_summary(chunks):
-    prompt = """Extract ONLY this JSON. Use "Not mentioned" only if truly missing.
+    prompt = """Extract ONLY this exact JSON. Use "Not mentioned" only if truly missing.
 Use \\n- for bullets.
 
 {
@@ -158,7 +156,7 @@ def format_summary(json_str):
         html += f"<h3>{title}</h3>"
         for k, v in fields.items():
             label = k.replace("_", " ").title()
-            if not v or v == "Not mentioned":
+            if not v or v.strip() == "Not mentioned":
                 v = "<em style='color:#999'>Not mentioned</em>"
             elif isinstance(v, str) and "\n" in v:
                 items = [f"• {x.strip('- ')}" for x in v.split('\n') if x.strip()]
@@ -184,7 +182,7 @@ def create_pdf(text, title="Tender Summary"):
     except:
         return None
 
-# ====================== SIDEBAR ======================
+# --------------------- SIDEBAR ---------------------
 with st.sidebar:
     st.header("Controls")
     uploaded = st.file_uploader("Upload Tender PDF/TXT", type=["pdf", "txt"])
@@ -195,18 +193,20 @@ with st.sidebar:
 
     if st.session_state.get("summary"):
         st.subheader("Translate")
-        LANGUAGES = {"Hindi":"Hindi","Tamil":"Tamil","Telugu":"Telugu","Kannada":"Kannada",
-                     "Malayalam":"Malayalam","Marathi":"Marathi","Gujarati":"Gujarati",
-                     "Bengali":"Bengali","Odia":"Odia","Punjabi":"Punjabi","Urdu":"Urdu","English":"English"}
+        LANGUAGES = {
+            "Hindi":"Hindi","Tamil":"Tamil","Telugu":"Telugu","Kannada":"Kannada",
+            "Malayalam":"Malayalam","Marathi":"Marathi","Gujarati":"Gujarati",
+            "Bengali":"Bengali","Odia":"Odia","Punjabi":"Punjabi","Urdu":"Urdu","English":"English"
+        }
         lang = st.selectbox("Language", options=list(LANGUAGES.keys()))
         if st.button("Translate", type="primary"):
             with st.spinner("Translating..."):
-                trans = ask_llm(f"Translate to {LANGUAGES[lang]}:", st.session_state.summary)
+                trans = ask_llm(f"Translate this to {LANGUAGES[lang]}:", st.session_state.summary)
                 st.session_state.translated = trans
                 st.session_state.lang = lang
                 st.rerun()
 
-# ====================== MAIN LOGIC ======================
+# --------------------- MAIN LOGIC ---------------------
 if uploaded and "text_chunks" not in st.session_state:
     with st.spinner("Reading document..."):
         raw = extract_text_from_pdf(uploaded) if uploaded.type == "application/pdf" else uploaded.getvalue().decode("utf-8", errors="replace")
@@ -221,15 +221,15 @@ if uploaded and "text_chunks" not in st.session_state:
         result = generate_summary(st.session_state.text_chunks)
         if result:
             st.session_state.summary = result
-            st.success("Done!")
+            st.success("Analysis Complete!")
             st.rerun()
         else:
             st.error("Analysis failed")
             st.stop()
 
-# ====================== DISPLAY ======================
+# --------------------- DISPLAY ---------------------
 if st.session_state.get("summary"):
-    st.subheader("Tender Summary")
+    st.subheader("Extracted Tender Details")
     st.markdown(format_summary(st.session_state.summary), unsafe_allow_html=True)
 
     if st.session_state.get("translated"):
@@ -255,7 +255,7 @@ if st.session_state.get("summary"):
             st.markdown(f"**Answer:** {ans}")
 
 else:
-    st.info("Upload any tender PDF/TXT to start")
-    st.markdown("Perfect for GeM • PWD • CPWD • Hindi • Scanned PDFs")
+    st.info("Upload any tender PDF to start")
+    st.markdown("Works perfectly on GeM • PWD • CPWD • Hindi • Scanned PDFs")
 
-st.caption("Bid Analyser Pro v5 • pdfplumber + Groq Llama3-70B • 100% GeM Ready")
+st.caption("Bid Analyser Pro • pdfplumber + Groq Llama3-70B • 100% Ready")
