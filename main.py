@@ -5,51 +5,59 @@ import re
 import time
 import json
 from io import BytesIO
-import pdfplumber
 
-# --------------------- FIX FOR CLOUD ---------------------
+# --------------------- CLOUD FIX ---------------------
 os.environ["STREAMLIT_SERVER_HEADLESS"] = "true"
 
-# --------------------- GROQ API ---------------------
+# --------------------- API KEY ---------------------
 from dotenv import load_dotenv
 load_dotenv()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 if not GROQ_API_KEY:
-    st.error("Please set GROQ_API_KEY in .env file")
+    st.error("GROQ_API_KEY not found. Add it to .env or Render secrets.")
     st.stop()
 
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
-# --------------------- PDFPLUMBER (MUST BE INSTALLED) ---------------------
+# --------------------- PDF READING (SMART FALLBACK) ---------------------
 try:
     import pdfplumber
+    PDFPLUMBER_AVAILABLE = True
+    st.success("pdfplumber loaded — perfect for GeM & scanned PDFs")
 except ImportError:
-    st.error("pdfplumber not found. Run: pip install pdfplumber")
-    st.stop()
+    PDFPLUMBER_AVAILABLE = False
+    import PyPDF2
+    st.warning("pdfplumber not installed. Using PyPDF2 (works, but weaker on GeM tables)")
 
 def extract_text_from_pdf(pdf_file):
-    """Extracts text + tables from GeM, PWD, scanned PDFs perfectly"""
-    full_text = ""
+    if PDFPLUMBER_AVAILABLE:
+        try:
+            with pdfplumber.open(pdf_file) as pdf:
+                text = ""
+                for i, page in enumerate(pdf.pages):
+                    page_text = page.extract_text()
+                    if page_text:
+                        text += f"\n--- Page {i+1} ---\n{page_text}\n"
+                    else:
+                        tables = page.extract_tables()
+                        for table in tables:
+                            for row in table:
+                                clean = " | ".join([c.strip() if c else "" for c in row])
+                                text += clean + "\n"
+                return text.strip() if text.strip() else None
+        except:
+            pass
+
+    # Fallback to PyPDF2
     try:
-        with pdfplumber.open(pdf_file) as pdf:
-            for i, page in enumerate(pdf.pages):
-                text = page.extract_text()
-                if text:
-                    full_text += f"\n--- Page {i+1} ---\n{text}\n"
-                else:
-                    # Extract tables (GeM tenders live here!)
-                    tables = page.extract_tables()
-                    for table in tables:
-                        for row in table:
-                            clean_row = " | ".join([cell.strip() if cell else "" for cell in row])
-                            full_text += clean_row + "\n"
-                    # Final fallback
-                    fallback = page.extract_text(x_tolerance=3, y_tolerance=3, keep_blank_chars=True)
-                    if fallback:
-                        full_text += f"\n--- Page {i+1} ---\n{fallback}\n"
-        return full_text.strip() if full_text.strip() else None
-    except Exception as e:
-        st.error(f"PDF Error: {e}")
+        reader = PyPDF2.PdfReader(pdf_file)
+        text = ""
+        for i, page in enumerate(reader.pages):
+            page_text = page.extract_text()
+            if page_text:
+                text += f"\n--- Page {i+1} ---\n{page_text}\n"
+        return text.strip() if text.strip() else None
+    except:
         return None
 
 # --------------------- PAGE STYLE ---------------------
@@ -62,7 +70,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<div class="main-header"><h1>Bid Analyser Pro</h1><p>GeM • PWD • Hindi • Scanned PDFs — Works 100%</p></div>', unsafe_allow_html=True)
+st.markdown('<div class="main-header"><h1>Bid Analyser Pro</h1><p>Works on GeM • PWD • Hindi • Scanned PDFs</p></div>', unsafe_allow_html=True)
 
 # --------------------- HELPERS ---------------------
 def clean_text(text):
@@ -70,23 +78,21 @@ def clean_text(text):
     return re.sub(r'\s+', ' ', text).strip()
 
 def split_chunks(text, size=3000, overlap=300):
-    if len(text) <= size:
-        return [text]
+    if len(text) <= size: return [text]
     chunks = []
     start = 0
     while start < len(text):
         end = start + size
         chunks.append(text[start:end])
         start = end - overlap
-        if start >= len(text):
-            break
+        if start >= len(text): break
     return chunks
 
 def ask_llm(prompt, context="", model="llama3-70b-8192", temp=0.1):
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     messages = [{"role": "system", "content": "You are an expert in Indian government tenders."}]
-    user_msg = f"{context}\n\nTask: {prompt}" if context else prompt
-    messages.append({"role": "user", "content": user_msg})
+    user_content = f"{context}\n\nTask: {prompt}" if context else prompt
+    messages.append({"role": "user", "content": user_content})
     data = {"model": model, "messages": messages, "temperature": temp, "max_tokens": 2048}
 
     for _ in range(3):
@@ -97,13 +103,13 @@ def ask_llm(prompt, context="", model="llama3-70b-8192", temp=0.1):
                 continue
             r.raise_for_status()
             return r.json()["choices"][0]["message"]["content"].strip()
-        except:
+        except Exception as e:
             time.sleep(3)
-    return "API Error — check key or network"
+    return "API Error"
 
 def generate_summary(chunks):
-    prompt = '''Extract ONLY this exact JSON format. Use "Not mentioned" only if truly missing.
-Use \\n- for bullet points. Output ONLY valid JSON.
+    prompt = '''Extract ONLY this JSON. Use "Not mentioned" only if truly missing.
+Use \\n- for bullets. Output ONLY valid JSON.
 
 {
   "basic_information": {
@@ -142,8 +148,7 @@ Use \\n- for bullet points. Output ONLY valid JSON.
     if not parts:
         return None
 
-    final_prompt = "Merge all these JSONs into ONE perfect JSON. Output ONLY the JSON:"
-    return ask_llm(final_prompt + "\n\n" + "\n---\n".join(parts))
+    return ask_llm("Merge all JSONs into ONE perfect JSON. Output ONLY JSON:\n\n" + "\n---\n".join(parts))
 
 def format_summary(json_str):
     match = re.search(r"\{.*\}", json_str, re.DOTALL)
@@ -152,7 +157,7 @@ def format_summary(json_str):
     try:
         data = json.loads(match.group(0))
     except:
-        return f"<pre>JSON Error:\n{match.group(0)}</pre>"
+        return f"<pre>JSON Parse Error:\n{match.group(0)}</pre>"
 
     html = "<div class='summary-card'>"
     sections = {
@@ -171,8 +176,7 @@ def format_summary(json_str):
                 items = [f"• {line.strip('- ')}" for line in v.split('\n') if line.strip()]
                 v = "<ul>" + "".join(f"<li>{item}</li>" for item in items) + "</ul>"
             html += f"<p><strong>{label}:</strong> {v}</p>"
-    html += "</div>"
-    return html
+    return html + "</div>"
 
 def create_pdf(text, title="Tender Summary"):
     try:
@@ -183,15 +187,13 @@ def create_pdf(text, title="Tender Summary"):
         doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=50)
         styles = getSampleStyleSheet()
         story = [Paragraph(title, styles['Title']), Spacer(1, 20)]
-        for para_style = styles['Normal']
         for p in text.split('\n\n'):
             if p.strip():
-                story.append(Paragraph(p.replace('\n', '<br/>'), para_style))
+                story.append(Paragraph(p.replace('\n', '<br/>'), styles['Normal']))
                 story.append(Spacer(1, 12))
         doc.build(story)
         return buffer.getvalue()
-    except Exception as e:
-        st.error(f"PDF generation failed: {e}")
+    except:
         return None
 
 # --------------------- SIDEBAR ---------------------
@@ -199,81 +201,78 @@ with st.sidebar:
     st.header("Controls")
     uploaded = st.file_uploader("Upload Tender PDF/TXT", type=["pdf", "txt"])
 
-    if st.button("Clear All Data", type="secondary", use_container_width=True):
-        for key in list(st.session_state.keys()):
-            del st.session_state[key]
+    if st.button("Clear All", type="secondary", use_container_width=True):
+        for k in list(st.session_state.keys()):
+            del st.session_state[k]
         st.rerun()
 
     if st.session_state.get("summary"):
-        st.subheader("Translate Summary")
-        LANGUAGES = {
-            "Hindi": "Hindi", "Tamil": "Tamil", "Telugu": "Telugu", "Kannada": "Kannada",
-            "Malayalam": "Malayalam", "Marathi": "Marathi", "Gujarati": "Gujarati",
-            "Bengali": "Bengali", "Odia": "Odia", "Punjabi": "Punjabi", "Urdu": "Urdu", "English": "English"
-        }
-        lang = st.selectbox("Select language", options=list(LANGUAGES.keys()))
-        if st.button("Translate Now", type="primary", use_container_width=True):
+        st.subheader("Translate")
+        LANGUAGES = {"Hindi":"Hindi","Tamil":"Tamil","Telugu":"Telugu","Kannada":"Kannada",
+                     "Malayalam":"Malayalam","Marathi":"Marathi","Gujarati":"Gujarati",
+                     "Bengali":"Bengali","Odia":"Odia","Punjabi":"Punjabi","Urdu":"Urdu"}
+        lang = st.selectbox("Language", options=list(LANGUAGES.keys()))
+        if st.button("Translate", type="primary"):
             with st.spinner("Translating..."):
-                trans = ask_llm(f"Translate this entire summary to {LANGUAGES[lang]} only. Keep format:", st.session_state.summary)
+                trans = ask_llm(f"Translate to {LANGUAGES[lang]}:", st.session_state.summary)
                 st.session_state.translated = trans
-                st.session_state.trans_lang = lang
+                st.session_state.lang = lang
                 st.rerun()
 
-# --------------------- MAIN LOGIC ---------------------
+# --------------------- MAIN ---------------------
 if uploaded and "text_chunks" not in st.session_state:
     with st.spinner("Reading document..."):
         if uploaded.type == "application/pdf":
-            raw_text = extract_text_from_pdf(uploaded)
+            raw = extract_text_from_pdf(uploaded)
         else:
-            raw_text = uploaded.getvalue().decode("utf-8", errors="replace")
+            raw = uploaded.getvalue().decode("utf-8", errors="replace")
 
-        if not raw_text or len(raw_text) < 100:
-            st.error("Could not extract text from file. Try another PDF.")
+        if not raw or len(raw) < 100:
+            st.error("Could not read text. Try a different PDF or install pdfplumber")
             st.stop()
 
-        clean = clean_text(raw_text)
+        clean = clean_text(raw)
         st.session_state.text_chunks = split_chunks(clean)
-        st.session_state.raw_text = clean
+        st.session_state.raw = clean
 
-    with st.spinner("Analyzing tender with AI... (30–60 seconds)"):
-        summary_json = generate_summary(st.session_state.text_chunks)
-        if summary_json:
-            st.session_state.summary = summary_json
-            st.success("Analysis Complete!")
+    with st.spinner("Analyzing with AI (30–60s)..."):
+        result = generate_summary(st.session_state.text_chunks)
+        if result:
+            st.session_state.summary = result
+            st.success("Complete!")
             st.rerun()
         else:
-            st.error("Failed to generate summary. Try again.")
+            st.error("Analysis failed")
             st.stop()
 
-# --------------------- DISPLAY RESULTS ---------------------
+# --------------------- DISPLAY ---------------------
 if st.session_state.get("summary"):
     st.subheader("Tender Summary")
     st.markdown(format_summary(st.session_state.summary), unsafe_allow_html=True)
 
     if st.session_state.get("translated"):
-        st.subheader(f"Translation ({st.session_state.trans_lang})")
+        st.subheader(f"Translation ({st.session_state.lang})")
         st.markdown(f"<div class='summary-card'>{st.session_state.translated.replace(chr(10), '<br>')}</div>", unsafe_allow_html=True)
 
-    col1, col2 = st.columns(2)
-    with col1:
-        pdf_en = create_pdf(st.session_state.summary, "Tender Summary - English")
+    c1, c2 = st.columns(2)
+    with c1:
+        pdf_en = create_pdf(st.session_state.summary)
         if pdf_en:
-            st.download_button("Download English PDF", pdf_en, "tender_english.pdf", "application/pdf")
-    with col2:
+            st.download_button("English PDF", pdf_en, "tender_en.pdf", "application/pdf")
+    with c2:
         if st.session_state.get("translated"):
-            pdf_tr = create_pdf(st.session_state.translated, f"Tender Summary - {st.session_state.trans_lang}")
+            pdf_tr = create_pdf(st.session_state.translated)
             if pdf_tr:
-                st.download_button(f"Download {st.session_state.trans_lang} PDF", pdf_tr, "tender_translated.pdf", "application/pdf")
+                st.download_button(f"{st.session_state.lang} PDF", pdf_tr, "tender_trans.pdf", "application/pdf")
 
     st.subheader("Ask Questions")
-    question = st.text_input("Ask anything about this tender:")
-    if st.button("Ask AI") and question:
-        with st.spinner("Searching document..."):
-            answer = ask_llm(question, st.session_state.raw_text)
-            st.markdown(f"**Answer:** {answer}")
-
+    q = st.text_input("Ask anything:")
+    if st.button("Ask") and q:
+        with st.spinner("Searching..."):
+            ans = ask_llm(q, st.session_state.raw)
+            st.markdown(f"**Answer:** {ans}")
 else:
-    st.info("Upload any Indian government tender (GeM, PWD, CPWD, etc.)")
-    st.markdown("Works perfectly with Hindi, scanned, table-heavy PDFs")
+    st.info("Upload any tender PDF to start")
+    st.markdown("Works on GeM • PWD • Hindi • Scanned PDFs")
 
-st.caption("Bid Analyser Pro • pdfplumber + Groq Llama3-70B • 100% Working • No Errors")
+st.caption("Bid Analyser Pro • Works even without pdfplumber • Groq Llama3-70B")
