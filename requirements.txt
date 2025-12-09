@@ -5,7 +5,7 @@ python-dotenv
 reportlab>=3.6
 arabic-reshaper
 python-bidi
-
+pdfplumber
 
 
 
